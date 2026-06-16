@@ -14,7 +14,7 @@ type Car = { x: number; y: number };
 type Occ = {
   ts: number; id: string; name: string; type: string; surface: string | null;
   count: number; inside: number | null; cars: Car[] | null; map: [number, number] | null;
-  capacity: number | null; refresh_sec: number | null; image: string | null;
+  capacity: number | null; peak: number | null; refresh_sec: number | null; image: string | null;
 };
 
 const url = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
@@ -55,6 +55,7 @@ export async function POST(request: Request) {
     cars: Array.isArray(b.cars) ? b.cars.map((c: Car) => ({ x: Number(c.x) || 0, y: Number(c.y) || 0 })) : null,
     map: Array.isArray(b.map) && b.map.length === 2 ? [Number(b.map[0]), Number(b.map[1])] : null,
     capacity: b.capacity == null ? null : Number(b.capacity) || 0,
+    peak: b.peak == null ? null : Number(b.peak) || 0,
     refresh_sec: b.refresh_sec == null ? null : Number(b.refresh_sec) || 0,
     image: typeof b.image === 'string' ? b.image : null,
   });

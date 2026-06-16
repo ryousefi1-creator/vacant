@@ -32,6 +32,21 @@ import spatial
 
 UA = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)'}
 NYC = 'https://webcams.nyctmc.org/api/cameras/{}/image'
+PEAKS_FILE = 'work/peaks.json'  # most cars ever counted per lot — grounds capacity in real data
+
+
+def load_peaks():
+    try:
+        return json.load(open(PEAKS_FILE))
+    except Exception:
+        return {}
+
+
+def save_peaks(p):
+    try:
+        json.dump(p, open(PEAKS_FILE, 'w'))
+    except Exception:
+        pass
 
 # kept streets: clearly labeled live vehicle counters (no parking). 2 is enough
 # for "always moving" without burying the lots.
@@ -88,20 +103,26 @@ def post(api, payload):
     urllib.request.urlopen(req, timeout=10).read()
 
 
-def do_lot(model, calib, api, conf, imgsz, device):
+def do_lot(model, calib, api, conf, imgsz, device, peaks):
     frame = fetch(calib['url'])
     if frame is None:
         raise RuntimeError('no frame')
     xy = detect(model, frame, conf, imgsz, device)
     cars, mask = spatial.map_cars(calib, xy)
+    inside = len(cars)
+    # capacity = careful per-lot floor, corrected UP by the most cars we've ever
+    # counted there (real data, not a guess; self-improves as the lot fills).
+    peak = max(int(peaks.get(calib['id'], 0)), inside)
+    peaks[calib['id']] = peak
+    capacity = max(calib['capacity'], peak)
     viz = annotate_lot(frame, calib, xy, mask)
     post(api, {
         'id': calib['id'], 'name': calib['name'], 'type': 'lot', 'surface': calib['surface'],
-        'map': calib['map_size'], 'cars': cars, 'inside': len(cars), 'count': int(len(xy)),
-        'capacity': calib['capacity'], 'refresh_sec': calib['refresh_sec'],
+        'map': calib['map_size'], 'cars': cars, 'inside': inside, 'count': int(len(xy)),
+        'capacity': capacity, 'peak': peak, 'refresh_sec': calib['refresh_sec'],
         'image': to_data_uri(viz),
     })
-    return len(cars), int(len(xy))
+    return inside, int(len(xy))
 
 
 def do_street(model, st, api, conf, imgsz, device):
@@ -123,13 +144,15 @@ def main():
     ap.add_argument('--api', default='http://localhost:3000')
     ap.add_argument('--device', default='mps')
     ap.add_argument('--conf', type=float, default=0.15)
-    ap.add_argument('--imgsz', type=int, default=1280)
+    ap.add_argument('--imgsz', type=int, default=1280, help='street detection size')
+    ap.add_argument('--lot-imgsz', type=int, default=1920, help='lot detection size (higher = catches more far cars)')
     ap.add_argument('--lot-interval', type=float, default=30, help='seconds between lot re-fetches (snapshots refresh slowly)')
     ap.add_argument('--street-interval', type=float, default=5, help='seconds between street re-fetches')
     ap.add_argument('--model', default='models/yolo11x.pt')
     args = ap.parse_args()
 
     calibs = spatial.load_calibs('calib')
+    peaks = load_peaks()
     model = YOLO(args.model)
     print(f'worker up: {len(calibs)} calibrated lots + {len(STREETS)} streets -> {args.api}', flush=True)
     if not calibs:
@@ -150,8 +173,9 @@ def main():
             try:
                 if kind == 'lot':
                     c = calibs[cid]
-                    inside, total = do_lot(model, c, args.api, args.conf, args.imgsz, args.device)
-                    print(f"  [lot] {c['name']}: {inside} in-lot ({total} detected)", flush=True)
+                    inside, total = do_lot(model, c, args.api, args.conf, args.lot_imgsz, args.device, peaks)
+                    save_peaks(peaks)
+                    print(f"  [lot] {c['name']}: {inside} in-lot ({total} detected, peak {peaks.get(cid)})", flush=True)
                     due[(kind, cid)] = time.time() + args.lot_interval
                 else:
                     st = next(s for s in STREETS if s['id'] == cid)

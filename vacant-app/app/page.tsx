@@ -6,7 +6,7 @@ type Car = { x: number; y: number };
 type Occ = {
   ts: number; id: string; name: string; type: string; surface: string | null;
   count: number; inside: number | null; cars: Car[] | null; map: [number, number] | null;
-  capacity: number | null; refresh_sec: number | null; image: string | null;
+  capacity: number | null; peak: number | null; refresh_sec: number | null; image: string | null;
 };
 
 function cadence(refresh: number | null): string {
@@ -135,9 +135,15 @@ export default function Home() {
               <div style={{ color: '#8a97a6', fontSize: 11, fontWeight: 600, letterSpacing: '1.2px', textTransform: 'uppercase' }}>
                 {pct}% full · {carsHere} car{carsHere !== 1 ? 's' : ''} parked
               </div>
+              {cur?.peak != null && cur.peak > 0 && (
+                <div style={{ marginTop: 10, display: 'inline-flex', alignItems: 'center', gap: 7, padding: '5px 11px', borderRadius: 30, background: '#ecfdf5', color: '#047857', fontSize: 11.5, fontWeight: 600 }}>
+                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#10b981' }} />
+                  busiest measured here: {cur.peak} car{cur.peak !== 1 ? 's' : ''}
+                </div>
+              )}
               {estCap && (
                 <div style={{ marginTop: 8, color: '#a3adb8', fontSize: 11, lineHeight: 1.5 }}>
-                  gravel lot — no painted stalls, so capacity is estimated. Car positions are exact (live detection).
+                  free-form gravel lot — no painted stalls, so capacity is an estimate, grounded in the most cars we&apos;ve actually counted here. Car positions are exact (live detection).
                 </div>
               )}
             </>
