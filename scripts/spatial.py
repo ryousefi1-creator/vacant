@@ -54,3 +54,34 @@ def load_calibs(calib_dir='calib'):
         c = json.load(open(p))
         out[c['id']] = c
     return out
+
+
+# --- per-stall occupancy (PAVED lots with real painted/marked stalls only) ---
+# A car box covering >= `overlap` of a stall's area marks it taken. This is the
+# SAME box-overlap metric proven in scripts/live.py + pklot_eval.py — kept in one
+# place so the worker (push.py) and the demo (demo_paved.py) can't drift.
+
+def stall_states(stalls, xy, overlap=0.30):
+    """stalls = [{'poly': [[x,y]x4 image coords]}]; xy = car boxes (image space).
+    Returns a list of bools (True = taken) aligned to `stalls`."""
+    quads = [np.array([[x1, y1], [x2, y1], [x2, y2], [x1, y2]], np.float32) for x1, y1, x2, y2 in xy]
+    out = []
+    for s in stalls:
+        poly = np.array(s['poly'], np.float32)
+        area = max(cv2.contourArea(poly), 1.0)
+        best = max((cv2.intersectConvexConvex(poly, cq)[0] for cq in quads), default=0.0)
+        out.append(bool(best / area >= overlap))
+    return out
+
+
+def project_stalls(calib, states):
+    """Project each stall's image polygon to TOP-DOWN map coords (via the lot
+    homography) so the UI can draw real spots in real positions, each tagged
+    taken/open. Returns [{'poly': [[mx,my]x4], 'taken': bool}]."""
+    mw, mh = calib['map_size']
+    H = homography(calib['lot_quad'], mw, mh)
+    out = []
+    for s, taken in zip(calib['stalls'], states):
+        pts = project(H, s['poly'])
+        out.append({'poly': [[round(float(x), 1), round(float(y), 1)] for x, y in pts], 'taken': bool(taken)})
+    return out

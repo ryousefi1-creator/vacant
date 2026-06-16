@@ -85,6 +85,19 @@ def annotate_lot(frame, calib, xy, mask):
     return viz
 
 
+def annotate_stalls(frame, calib, xy, states):
+    """PAVED lots: draw each real stall polygon red=taken / green=open, with faint
+    car boxes for context (image space)."""
+    viz = frame.copy()
+    lw = max(2, frame.shape[1] // 600)
+    for x1, y1, x2, y2 in xy:
+        cv2.rectangle(viz, (int(x1), int(y1)), (int(x2), int(y2)), (150, 150, 150), 1)
+    for s, taken in zip(calib['stalls'], states):
+        poly = np.array(s['poly'], np.int32)
+        cv2.polylines(viz, [poly], True, (0, 0, 255) if taken else (0, 200, 0), lw)
+    return viz
+
+
 def annotate_street(frame, xy):
     viz = frame.copy()
     lw = max(2, frame.shape[1] // 480)
@@ -103,11 +116,29 @@ def post(api, payload):
     urllib.request.urlopen(req, timeout=10).read()
 
 
-def do_lot(model, calib, api, conf, imgsz, device, peaks):
+def do_lot(model, calib, api, conf, imgsz, device, peaks, overlap=0.30):
     frame = fetch(calib['url'])
     if frame is None:
         raise RuntimeError('no frame')
     xy = detect(model, frame, conf, imgsz, device)
+
+    # PAVED lots with real marked stalls -> EXACT per-stall occupancy (capacity is
+    # the marked-stall count, open = # empty). The estimate/peak path below is only
+    # for free-form gravel lots that have no countable spaces.
+    if calib.get('stalls'):
+        states = spatial.stall_states(calib['stalls'], xy, overlap)
+        stalls_out = spatial.project_stalls(calib, states)
+        taken = sum(states)
+        open_n = len(states) - taken
+        viz = annotate_stalls(frame, calib, xy, states)
+        post(api, {
+            'id': calib['id'], 'name': calib['name'], 'type': 'lot', 'surface': calib['surface'],
+            'map': calib['map_size'], 'stalls': stalls_out, 'inside': taken, 'count': int(len(xy)),
+            'capacity': len(states), 'open': open_n, 'refresh_sec': calib['refresh_sec'],
+            'image': to_data_uri(viz),
+        })
+        return taken, int(len(xy))
+
     cars, mask = spatial.map_cars(calib, xy)
     inside = len(cars)
     # capacity = careful per-lot floor, corrected UP by the most cars we've ever
@@ -146,6 +177,7 @@ def main():
     ap.add_argument('--conf', type=float, default=0.15)
     ap.add_argument('--imgsz', type=int, default=1280, help='street detection size')
     ap.add_argument('--lot-imgsz', type=int, default=1920, help='lot detection size (higher = catches more far cars)')
+    ap.add_argument('--overlap', type=float, default=0.30, help='paved-stall occupancy threshold (box covers >= this frac of a stall)')
     ap.add_argument('--lot-interval', type=float, default=30, help='seconds between lot re-fetches (snapshots refresh slowly)')
     ap.add_argument('--street-interval', type=float, default=5, help='seconds between street re-fetches')
     ap.add_argument('--model', default='models/yolo11x.pt')
@@ -173,7 +205,7 @@ def main():
             try:
                 if kind == 'lot':
                     c = calibs[cid]
-                    inside, total = do_lot(model, c, args.api, args.conf, args.lot_imgsz, args.device, peaks)
+                    inside, total = do_lot(model, c, args.api, args.conf, args.lot_imgsz, args.device, peaks, args.overlap)
                     save_peaks(peaks)
                     print(f"  [lot] {c['name']}: {inside} in-lot ({total} detected, peak {peaks.get(cid)})", flush=True)
                     due[(kind, cid)] = time.time() + args.lot_interval

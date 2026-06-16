@@ -3,9 +3,11 @@ import { useEffect, useMemo, useState } from 'react';
 import LotMap from './LotMap';
 
 type Car = { x: number; y: number };
+type Stall = { poly: [number, number][]; taken: boolean };
 type Occ = {
   ts: number; id: string; name: string; type: string; surface: string | null;
   count: number; inside: number | null; cars: Car[] | null; map: [number, number] | null;
+  stalls: Stall[] | null;
   capacity: number | null; peak: number | null; refresh_sec: number | null; image: string | null;
 };
 
@@ -45,11 +47,12 @@ export default function Home() {
   const cur = activeId ? data[activeId] : null;
 
   const isLot = cur?.type === 'lot';
-  const carsHere = isLot ? (cur?.inside ?? 0) : (cur?.count ?? 0);
-  const cap = cur?.capacity ?? null;
+  const stallList = isLot && Array.isArray(cur?.stalls) && cur!.stalls!.length ? cur!.stalls! : null;
+  const carsHere = stallList ? stallList.filter((s) => s.taken).length : isLot ? (cur?.inside ?? 0) : (cur?.count ?? 0);
+  const cap = stallList ? stallList.length : (cur?.capacity ?? null);
   const open = cap != null ? Math.max(0, cap - carsHere) : null;
   const pct = cap ? Math.min(100, Math.round((carsHere / cap) * 100)) : 0;
-  const estCap = cur?.surface === 'gravel'; // gravel lots have no painted stalls -> capacity is an estimate
+  const estCap = isLot && !stallList && cur?.surface === 'gravel'; // gravel = estimate; real marked stalls = exact
   const status = pct > 90 ? 'Packed' : pct > 75 ? 'Busy' : pct > 45 ? 'Moderate' : 'Wide open';
   const ago = cur?.ts ? Math.round((Math.max(now, Date.now()) - cur.ts) / 1000) : null;
 
@@ -107,7 +110,7 @@ export default function Home() {
             {cur ? cur.name : 'no location'} · {isLot ? `${cur?.surface ?? ''} lot` : 'street'}
           </div>
           {isLot
-            ? <LotMap map={cur?.map ?? null} cars={cur?.cars ?? null} surface={cur?.surface ?? null} capacity={cur?.capacity ?? null} />
+            ? <LotMap map={cur?.map ?? null} cars={cur?.cars ?? null} surface={cur?.surface ?? null} capacity={cur?.capacity ?? null} stalls={cur?.stalls ?? null} />
             : (
               <div style={{ width: '100%', maxWidth: 760 }}>
                 <div style={{ borderRadius: 16, overflow: 'hidden', border: '1px solid #e7ecf0', background: '#0d1b2a', aspectRatio: '16/9', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -144,6 +147,11 @@ export default function Home() {
               {estCap && (
                 <div style={{ marginTop: 8, color: '#a3adb8', fontSize: 11, lineHeight: 1.5 }}>
                   free-form gravel lot — no painted stalls, so capacity is an estimate, grounded in the most cars we&apos;ve actually counted here. Car positions are exact (live detection).
+                </div>
+              )}
+              {stallList && (
+                <div style={{ marginTop: 8, color: '#a3adb8', fontSize: 11, lineHeight: 1.5 }}>
+                  Paved lot with marked stalls — every spot is checked live, so this is an <b style={{ color: '#059669' }}>exact</b> count: {open} of {cap} spaces open right now.
                 </div>
               )}
             </>

@@ -11,9 +11,11 @@ import { Redis } from '@upstash/redis';
 export const dynamic = 'force-dynamic';
 
 type Car = { x: number; y: number };
+type Stall = { poly: [number, number][]; taken: boolean };
 type Occ = {
   ts: number; id: string; name: string; type: string; surface: string | null;
   count: number; inside: number | null; cars: Car[] | null; map: [number, number] | null;
+  stalls: Stall[] | null;
   capacity: number | null; peak: number | null; refresh_sec: number | null; image: string | null;
 };
 
@@ -53,6 +55,12 @@ export async function POST(request: Request) {
     count: Number(b.count) || 0,
     inside: b.inside == null ? null : Number(b.inside) || 0,
     cars: Array.isArray(b.cars) ? b.cars.map((c: Car) => ({ x: Number(c.x) || 0, y: Number(c.y) || 0 })) : null,
+    stalls: Array.isArray(b.stalls)
+      ? b.stalls.map((s: { poly: [number, number][]; taken: boolean }) => ({
+          poly: Array.isArray(s.poly) ? s.poly.map((p) => [Number(p[0]) || 0, Number(p[1]) || 0] as [number, number]) : [],
+          taken: !!s.taken,
+        }))
+      : null,
     map: Array.isArray(b.map) && b.map.length === 2 ? [Number(b.map[0]), Number(b.map[1])] : null,
     capacity: b.capacity == null ? null : Number(b.capacity) || 0,
     peak: b.peak == null ? null : Number(b.peak) || 0,
