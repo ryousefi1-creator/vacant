@@ -1,0 +1,23 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# CV model weights (large; downloaded on setup — see README)
+models/
+*.pt
+
+# research / scratch / heavy media (not part of the product)
+work/
+results/
+source/
+
+# Next.js app
+vacant-app/node_modules/
+vacant-app/.next/
+vacant-app/.vercel/
+vacant-app/next-env.d.ts
+
+# OS / editor
+.DS_Store
+*.log

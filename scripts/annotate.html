@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vacant — Stall Annotator</title>
+<style>
+  :root { --bg:#0e1116; --panel:#161b22; --line:#2a313c; --ink:#e6edf3; --mut:#8b949e; --acc:#ffd400; --ok:#2ea043; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif; }
+  header { padding:12px 18px; border-bottom:1px solid var(--line); display:flex; gap:18px; align-items:center; flex-wrap:wrap; }
+  header h1 { font-size:15px; margin:0; font-weight:650; letter-spacing:.2px; }
+  header .step { color:var(--mut); }
+  header .step b { color:var(--acc); }
+  .wrap { display:flex; gap:0; height:calc(100vh - 50px); }
+  .stage { flex:1; overflow:auto; padding:18px; display:flex; align-items:flex-start; justify-content:center; }
+  canvas { background:#000; max-width:100%; height:auto; cursor:crosshair; border:1px solid var(--line); border-radius:6px; }
+  aside { width:320px; flex:none; border-left:1px solid var(--line); background:var(--panel); padding:16px; overflow:auto; }
+  aside h2 { font-size:12px; text-transform:uppercase; letter-spacing:.6px; color:var(--mut); margin:18px 0 8px; }
+  aside h2:first-child { margin-top:0; }
+  .btn { display:inline-block; background:#21262d; color:var(--ink); border:1px solid var(--line); border-radius:6px; padding:8px 12px; cursor:pointer; font-size:13px; margin:0 6px 6px 0; }
+  .btn:hover { border-color:var(--acc); }
+  .btn.primary { background:var(--acc); color:#1a1a00; border-color:var(--acc); font-weight:650; }
+  .btn.ok { background:var(--ok); color:#fff; border-color:var(--ok); }
+  label.file { display:block; }
+  input[type=file] { display:none; }
+  .rows { font-size:12px; }
+  .row-item { display:flex; justify-content:space-between; padding:5px 8px; border:1px solid var(--line); border-radius:5px; margin-bottom:5px; }
+  .row-item span { color:var(--mut); }
+  .hint { color:var(--mut); font-size:12px; }
+  .hint b { color:var(--ink); }
+  .meta { color:var(--mut); font-size:12px; margin-top:6px; }
+  textarea { width:100%; height:120px; background:#0b0e13; color:var(--ink); border:1px solid var(--line); border-radius:6px; font:11px/1.4 ui-monospace,Menlo,monospace; padding:8px; }
+  .corner-key { display:flex; gap:6px; flex-wrap:wrap; margin:6px 0; }
+  .corner-key span { font-size:11px; padding:2px 6px; border:1px solid var(--line); border-radius:4px; color:var(--mut); }
+  .corner-key span.on { color:#1a1a00; background:var(--acc); border-color:var(--acc); font-weight:600; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Vacant · Stall Annotator</h1>
+  <div class="step">Click row corners: <b id="stepTxt">Top-Left</b></div>
+  <div class="step" id="dims"></div>
+</header>
+<div class="wrap">
+  <div class="stage"><canvas id="cv" width="960" height="540"></canvas></div>
+  <aside>
+    <h2>1 · Load frame</h2>
+    <label class="file"><span class="btn">Choose frame image…</span><input type="file" id="file" accept="image/*"></label>
+    <div class="hint">Use a frame from the camera at its <b>native video resolution</b> (e.g. <code>source/public/frame_U7.jpg</code>).</div>
+
+    <h2>2 · Trace each row</h2>
+    <div class="corner-key">
+      <span data-k="0">1 Top-Left</span><span data-k="1">2 Top-Right</span><span data-k="2">3 Bottom-Right</span><span data-k="3">4 Bottom-Left</span>
+    </div>
+    <div class="hint">Click the 4 outer corners of a parking row (clockwise from top-left), then enter how many stalls are in it. Add a row per painted row. Snap corners to the painted lines, not the cars.</div>
+    <div style="margin-top:10px">
+      <span class="btn" id="undoPt">Undo point</span>
+      <span class="btn" id="undoRow">Undo row</span>
+      <span class="btn" id="clear">Clear all</span>
+    </div>
+
+    <h2>Rows</h2>
+    <div class="rows" id="rows"><div class="hint">none yet</div></div>
+
+    <h2>3 · Export</h2>
+    <span class="btn primary" id="export">Download stalls.json</span>
+    <span class="btn" id="copy">Copy JSON</span>
+    <div class="meta">Save as <code>source/public/u7_stalls.json</code>, then re-run <code>per_spot.py</code>.</div>
+    <textarea id="json" readonly></textarea>
+  </aside>
+</div>
+<script>
+const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
+const stepTxt = document.getElementById('stepTxt'), dims = document.getElementById('dims');
+let img = null, pts = [], rows = [];
+const CORNERS = ['Top-Left','Top-Right','Bottom-Right','Bottom-Left'];
+
+function lerp(a,b,t){ return [a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t]; }
+function subdivide(c, n){
+  const [tl,tr,br,bl]=c, cells=[];
+  for(let i=0;i<n;i++){ const t0=i/n,t1=(i+1)/n;
+    cells.push([lerp(tl,tr,t0),lerp(tl,tr,t1),lerp(bl,br,t1),lerp(bl,br,t0)]); }
+  return cells;
+}
+// click order doesn't matter — sort any 4 corners into TL,TR,BR,BL (landscape row)
+function canon(p){
+  const s=[...p].sort((a,b)=>a[0]-b[0]), L=s.slice(0,2), R=s.slice(2);
+  L.sort((a,b)=>a[1]-b[1]); R.sort((a,b)=>a[1]-b[1]);
+  return [L[0],R[0],R[1],L[1]];
+}
+function draw(){
+  ctx.clearRect(0,0,cv.width,cv.height);
+  if(img) ctx.drawImage(img,0,0,cv.width,cv.height);
+  else { ctx.fillStyle='#11151b'; ctx.fillRect(0,0,cv.width,cv.height);
+    ctx.fillStyle='#5a636e'; ctx.font='16px sans-serif'; ctx.textAlign='center';
+    ctx.fillText('Load a frame to begin →', cv.width/2, cv.height/2); ctx.textAlign='start'; }
+  rows.forEach(r=>{
+    subdivide(r.corners,r.count).forEach((cell,idx)=>{
+      ctx.beginPath(); cell.forEach((p,i)=> i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1])); ctx.closePath();
+      ctx.strokeStyle='rgba(255,212,0,.95)'; ctx.lineWidth=1.5; ctx.stroke();
+      const cx=cell.reduce((s,p)=>s+p[0],0)/4, cy=cell.reduce((s,p)=>s+p[1],0)/4;
+      ctx.fillStyle='rgba(255,212,0,.95)'; ctx.font='12px sans-serif'; ctx.fillText(idx, cx-4, cy+4);
+    });
+  });
+  pts.forEach((p,i)=>{
+    ctx.beginPath(); ctx.arc(p[0],p[1],4,0,7); ctx.fillStyle='#2ea043'; ctx.fill();
+    ctx.fillStyle='#fff'; ctx.font='11px sans-serif'; ctx.fillText(i+1, p[0]+6, p[1]-6);
+    if(i){ ctx.beginPath(); ctx.moveTo(pts[i-1][0],pts[i-1][1]); ctx.lineTo(p[0],p[1]); ctx.strokeStyle='#2ea043'; ctx.lineWidth=1; ctx.stroke(); }
+  });
+  stepTxt.textContent = pts.length<4 ? CORNERS[pts.length] : 'row complete';
+  document.querySelectorAll('.corner-key span').forEach(s=> s.classList.toggle('on', +s.dataset.k===pts.length));
+  renderRows(); emit();
+}
+function renderRows(){
+  const el=document.getElementById('rows');
+  el.innerHTML = rows.length ? rows.map((r,i)=>`<div class="row-item"><span>row ${i+1}</span><b>${r.count} stalls</b></div>`).join('')
+    : '<div class="hint">none yet</div>';
+}
+function emit(){
+  const data = rows.map(r=>({corners:r.corners.map(p=>[Math.round(p[0]),Math.round(p[1])]), count:r.count}));
+  document.getElementById('json').value = JSON.stringify(data,null,2);
+  return data;
+}
+cv.addEventListener('click', e=>{
+  if(!img) return;
+  const rect=cv.getBoundingClientRect();
+  const x=(e.clientX-rect.left)*(cv.width/rect.width), y=(e.clientY-rect.top)*(cv.height/rect.height);
+  pts.push([x,y]);
+  if(pts.length===4){
+    const n=parseInt(prompt('How many stalls in this row?','10'),10);
+    if(n>0) rows.push({corners:canon(pts.slice()), count:n});
+    pts=[];
+  }
+  draw();
+});
+document.getElementById('file').addEventListener('change', e=>{
+  const f=e.target.files[0]; if(!f) return;
+  const im=new Image(); im.onload=()=>{ img=im; cv.width=im.naturalWidth; cv.height=im.naturalHeight;
+    dims.textContent=`frame ${im.naturalWidth}×${im.naturalHeight}px`; pts=[]; draw(); };
+  im.src=URL.createObjectURL(f);
+});
+document.getElementById('undoPt').onclick=()=>{ pts.pop(); draw(); };
+document.getElementById('undoRow').onclick=()=>{ if(!pts.length) rows.pop(); pts=[]; draw(); };
+document.getElementById('clear').onclick=()=>{ rows=[]; pts=[]; draw(); };
+document.getElementById('export').onclick=()=>{
+  const blob=new Blob([JSON.stringify(emit(),null,2)],{type:'application/json'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='u7_stalls.json'; a.click();
+};
+document.getElementById('copy').onclick=()=>{ navigator.clipboard.writeText(emit()&&document.getElementById('json').value); };
+draw();
+</script>
+</body>
+</html>

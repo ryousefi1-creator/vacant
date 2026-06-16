@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vacant — Live Lot</title>
+<style>
+  :root{
+    --bg:#eef3f1; --ink:#0d1b2a; --muted:#6b7a8d; --accent:#10b981; --accent-d:#059669;
+    --card:#ffffff; --line:#e7ecf0;
+    --asphalt:#b9c3cc; --asphalt-line:#f1f5f8; --open:#10b981;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;color:var(--ink);overflow:hidden;
+    font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background:
+      radial-gradient(900px 600px at 78% -8%, rgba(16,185,129,.16), transparent 60%),
+      radial-gradient(700px 500px at 10% 110%, rgba(16,185,129,.08), transparent 60%),
+      var(--bg);}
+  .wrap{display:grid;grid-template-columns:1fr 340px;height:100vh}
+  .stage{position:relative;overflow:hidden}
+  .hud{position:absolute;top:26px;left:30px;z-index:5}
+  .brand{font-weight:800;letter-spacing:-.3px;font-size:24px;display:flex;align-items:center;gap:10px}
+  .brand .mk{width:30px;height:30px;border-radius:9px;background:linear-gradient(160deg,var(--accent),var(--accent-d));
+    box-shadow:0 6px 16px rgba(16,185,129,.4)}
+  .brand span{color:var(--accent)}
+  .cam{margin-top:8px;color:var(--muted);font-size:12.5px;display:flex;align-items:center;gap:8px;font-weight:500}
+  .dot{width:8px;height:8px;border-radius:50%;background:#ef4444;animation:pulse 1.6s infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(239,68,68,.55)}70%{box-shadow:0 0 0 11px rgba(239,68,68,0)}100%{box-shadow:0 0 0 0 rgba(239,68,68,0)}}
+  svg{width:100%;height:100%;display:block}
+  .slab{fill:#cdd5dd}
+  .tile{fill:var(--asphalt);stroke:var(--asphalt-line);stroke-width:1.5}
+  .open{fill:var(--open);opacity:.85;transition:opacity .55s ease}
+  .spot.occupied .open{opacity:0}
+  .car{opacity:0;transition:opacity .5s ease}
+  .spot.occupied .car{opacity:1}
+  .spot:hover .tile{stroke:var(--accent);stroke-width:2.5}
+  .panel{background:var(--card);border-left:1px solid var(--line);padding:30px 26px;
+    box-shadow:-18px 0 40px rgba(13,27,42,.06)}
+  .pill{display:inline-flex;align-items:center;gap:7px;background:rgba(16,185,129,.12);color:var(--accent-d);
+    font-weight:600;font-size:12px;padding:6px 12px;border-radius:30px;margin-bottom:22px}
+  .lbl{color:var(--muted);text-transform:uppercase;letter-spacing:1.4px;font-size:11px;font-weight:600}
+  .big{font-size:74px;font-weight:800;line-height:.95;color:var(--accent);letter-spacing:-2px;margin-top:6px}
+  .big small{font-size:22px;color:var(--muted);font-weight:600;letter-spacing:0}
+  .bar{height:10px;border-radius:8px;background:#eef2f5;overflow:hidden;margin:18px 0 6px}
+  .bar>i{display:block;height:100%;width:0;border-radius:8px;
+    background:linear-gradient(90deg,var(--accent),#fbbf24 70%,#ef4444);transition:width .6s ease}
+  .cards{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:24px}
+  .stat{background:#f7faf9;border:1px solid var(--line);border-radius:16px;padding:15px 16px}
+  .stat b{display:block;font-size:26px;font-weight:800;letter-spacing:-.5px;margin-top:3px}
+  .sec{margin-top:26px}
+  .chip{display:inline-block;padding:5px 12px;border-radius:30px;background:#f0f3f6;color:var(--muted);
+    font-size:11.5px;font-weight:600;margin:6px 6px 0 0}
+  .chip.hot{color:#fff;background:linear-gradient(160deg,var(--accent),var(--accent-d))}
+  .foot{margin-top:28px;line-height:1.7;color:#8a97a6;font-size:12px}
+  .foot b{color:var(--accent-d)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="stage">
+    <div class="hud">
+      <div class="brand"><span class="mk"></span>Vac<span>ant</span></div>
+      <div class="cam"><span class="dot"></span> CAM-01 · West Lot · live</div>
+    </div>
+    <svg id="lot" viewBox="0 0 1000 760" preserveAspectRatio="xMidYMid meet"></svg>
+  </div>
+  <div class="panel">
+    <div class="pill">● Updating live</div>
+    <div class="lbl">Spaces open right now</div>
+    <div class="big"><span id="openN">—</span><small> / <span id="totS">—</span></small></div>
+    <div class="bar"><i id="fill"></i></div>
+    <div class="lbl" id="pctLine" style="color:#8a97a6"></div>
+    <div class="cards">
+      <div class="stat"><span class="lbl">Occupied</span><b id="occN">—</b></div>
+      <div class="stat"><span class="lbl">Fullness</span><b id="pctN">—</b></div>
+    </div>
+    <div class="sec">
+      <div class="lbl">Lot status</div>
+      <div id="chips" style="margin-top:10px"></div>
+    </div>
+    <div class="foot">
+      Every tile is one real space, placed from the camera’s ground-plane map.
+      <b>Green = open</b>, a car means taken. Streaming live from the CV model.
+    </div>
+  </div>
+</div>
+<script>
+  // ---------- isometric projection (2:1) ----------
+  const TW=62, TH=31, OX=470, OY=120;
+  const iso=(x,y,z=0)=>[OX+(x-y)*TW/2, OY+(x+y)*TH/2 - z];
+  const pts=a=>a.map(p=>p[0].toFixed(1)+','+p[1].toFixed(1)).join(' ');
+  const shade=(hex,f)=>{const n=parseInt(hex.slice(1),16);
+    return `rgb(${Math.min(255,(n>>16)*f)|0},${Math.min(255,((n>>8)&255)*f)|0},${Math.min(255,(n&255)*f)|0})`;};
+
+  // ---------- lot layout: 3 double-rows of 14, lanes between ----------
+  const COLS=14, rowsY=[0,1.7, 4.0,5.7, 8.0,9.7];
+  const SPOTS=[];
+  rowsY.forEach((ry,ri)=>{for(let c=0;c<COLS;c++) SPOTS.push({id:ri+'-'+c,x:c,y:ry,occ:Math.random()<0.6});});
+  SPOTS.sort((p,q)=>(p.x+p.y)-(q.x+q.y));
+
+  const COLORS=['#e9edf1','#d6dbe1','#cf3a3a','#3367b0','#f2f4f7','#5a6470','#c79a3f','#e2e6ea','#2f3a47'];
+  const carColor=id=>{let h=0;for(const ch of id)h=(h*33+ch.charCodeAt(0))%COLORS.length;return COLORS[h];};
+
+  function box(x,y,w,d,z0,z1){
+    const T=[iso(x,y,z1),iso(x+w,y,z1),iso(x+w,y+d,z1),iso(x,y+d,z1)];
+    const right=[T[1],iso(x+w,y,z0),iso(x+w,y+d,z0),T[2]];
+    const front=[T[3],T[2],iso(x+w,y+d,z0),iso(x,y+d,z0)];
+    return {T,right,front};
+  }
+
+  function spotSVG(s){
+    const w=0.92,d=1.5;
+    const g=[iso(s.x,s.y),iso(s.x+w,s.y),iso(s.x+w,s.y+d),iso(s.x,s.y+d)];
+    const col=carColor(s.id), ix=s.x+0.16, iy=s.y+0.18, bw=0.6, bd=1.14, bh=9;
+    const body=box(ix,iy,bw,bd,0,bh);
+    const cab=box(ix+0.09,iy+0.34,bw-0.18,bd*0.5,bh,bh+7);
+    const glass='#2b3a49';
+    const sh=[iso(ix-0.06,iy+0.06),iso(ix+bw+0.1,iy),iso(ix+bw+0.06,iy+bd+0.1),iso(ix-0.1,iy+bd+0.06)];
+    const car=`<g class="car">
+      <polygon points="${pts(sh)}" fill="rgba(20,30,42,.16)"/>
+      <polygon points="${pts(body.front)}" fill="${shade(col,.7)}"/>
+      <polygon points="${pts(body.right)}" fill="${shade(col,.85)}"/>
+      <polygon points="${pts(body.T)}" fill="${col}"/>
+      <polygon points="${pts(cab.front)}" fill="${shade(glass,.78)}"/>
+      <polygon points="${pts(cab.right)}" fill="${shade(glass,.92)}"/>
+      <polygon points="${pts(cab.T)}" fill="${glass}"/></g>`;
+    return `<g class="spot ${s.occ?'occupied':''}" id="s_${s.id}">
+      <polygon class="tile" points="${pts(g)}"/>
+      <polygon class="open" points="${pts(g)}"/>${car}</g>`;
+  }
+
+  // base slab under the whole lot
+  const slab=[iso(-0.6,-0.6),iso(COLS-0.1,-0.6),iso(COLS-0.1,11.6),iso(-0.6,11.6)];
+  document.getElementById('lot').innerHTML =
+    `<polygon class="slab" points="${pts(slab)}"/>` + SPOTS.map(spotSVG).join('');
+
+  function refresh(){
+    const occ=SPOTS.filter(s=>s.occ).length, tot=SPOTS.length, open=tot-occ, pct=Math.round(occ/tot*100);
+    openN.textContent=open; totS.textContent=tot; occN.textContent=occ; pctN.textContent=pct+'%';
+    fill.style.width=pct+'%';
+    pctLine.textContent=pct+'% full · '+open+' available';
+    const st = pct>90?'Packed':pct>75?'Busy':pct>45?'Moderate':'Wide open';
+    chips.innerHTML=`<span class="chip hot">${st}</span><span class="chip">${open} open</span><span class="chip">updated just now</span>`;
+  }
+  const setOcc=(s,v)=>{s.occ=v;document.getElementById('s_'+s.id).classList.toggle('occupied',v);};
+  refresh();
+
+  // simulate live changes (real CV JSON would drive this via window.updateFromFeed)
+  setInterval(()=>{
+    const n=1+Math.floor(Math.random()*3);
+    for(let i=0;i<n;i++){const s=SPOTS[Math.floor(Math.random()*SPOTS.length)];setOcc(s,Math.random()<0.5);}
+    refresh();
+  },1500);
+</script>
+</body>
+</html>
