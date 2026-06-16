@@ -1,0 +1,36 @@
+{
+  "id": "rsp3",
+  "name": "Rabbit Mountain Lot",
+  "type": "lot",
+  "surface": "gravel",
+  "url": "https://bouldercountyopenspace.org/photos/rsp/live3.jpg",
+  "frame": [
+    1920,
+    1080
+  ],
+  "refresh_sec": 900,
+  "lot_quad": [
+    [
+      40,
+      450
+    ],
+    [
+      1880,
+      430
+    ],
+    [
+      1860,
+      860
+    ],
+    [
+      40,
+      915
+    ]
+  ],
+  "map_size": [
+    700,
+    320
+  ],
+  "capacity": 16,
+  "stalls": null
+}

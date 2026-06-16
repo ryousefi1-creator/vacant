@@ -21,3 +21,6 @@ vacant-app/next-env.d.ts
 # OS / editor
 .DS_Store
 *.log
+
+# local launcher (contains the write token)
+start.sh

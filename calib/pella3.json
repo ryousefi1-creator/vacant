@@ -1,0 +1,36 @@
+{
+  "id": "pella3",
+  "name": "Pella Crossing Lot",
+  "type": "lot",
+  "surface": "gravel",
+  "url": "https://bouldercountyopenspace.org/photos/pella/live3.jpg",
+  "frame": [
+    1920,
+    1080
+  ],
+  "refresh_sec": 900,
+  "lot_quad": [
+    [
+      90,
+      395
+    ],
+    [
+      1830,
+      360
+    ],
+    [
+      1885,
+      650
+    ],
+    [
+      35,
+      700
+    ]
+  ],
+  "map_size": [
+    720,
+    320
+  ],
+  "capacity": 16,
+  "stalls": null
+}

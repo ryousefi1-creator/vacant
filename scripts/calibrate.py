@@ -36,6 +36,7 @@ META = {
     'pella3':   dict(name='Pella Crossing Lot', url='https://bouldercountyopenspace.org/photos/pella/live3.jpg', refresh_sec=900),
     'walker3':  dict(name='Walker Ranch Lot', url='https://bouldercountyopenspace.org/photos/walker/live3.jpg', refresh_sec=900),
     'lagerman2':dict(name='Lagerman Reservoir Lot', url='https://bouldercountyopenspace.org/photos/lagerman/live2.jpg', refresh_sec=900),
+    'rsp3':     dict(name='Rabbit Mountain Lot', url='https://bouldercountyopenspace.org/photos/rsp/live3.jpg', refresh_sec=900),
 }
 
 
