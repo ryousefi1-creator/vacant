@@ -73,15 +73,19 @@ def to_data_uri(viz, width=800):
     return 'data:image/jpeg;base64,' + base64.b64encode(buf).decode()
 
 
-def annotate_lot(frame, calib, xy, mask):
+def annotate_lot(frame, calib, info):
+    """Live-detection view: the orange lot region + each detection colored by its lot
+    membership (green=in, cyan=boundary/straddling but counted, orange=cut off by the
+    frame edge, grey=off-lot/dropped). Makes the refined region logic visible."""
     viz = frame.copy()
     q = np.array(calib['lot_quad'], np.int32)
     cv2.polylines(viz, [q], True, (0, 200, 255), 3)
     lw = max(2, frame.shape[1] // 600)
-    for (x1, y1, x2, y2), on in zip(xy, mask):
-        c = (0, 210, 0) if on else (120, 120, 120)
-        cv2.rectangle(viz, (int(x1), int(y1)), (int(x2), int(y2)), c, lw)
-        cv2.circle(viz, (int((x1 + x2) / 2), int(y2)), 5, (0, 0, 255), -1)
+    col = {'in': (0, 210, 0), 'boundary': (0, 210, 210), 'partial': (0, 140, 255), 'out': (120, 120, 120)}
+    for c in info:
+        x1, y1, x2, y2 = [int(v) for v in c['box']]
+        cv2.rectangle(viz, (x1, y1), (x2, y2), col[c['status']], lw)
+        cv2.circle(viz, (int(c['contact'][0]), int(c['contact'][1])), 5, (0, 0, 255), -1)
     return viz
 
 
@@ -127,7 +131,7 @@ def do_lot(model, calib, api, conf, imgsz, device, peaks, overlap=0.30):
     # for free-form gravel lots that have no countable spaces.
     if calib.get('stalls'):
         states = spatial.stall_states(calib['stalls'], xy, overlap)
-        stalls_out = spatial.project_stalls(calib, states)
+        stalls_out = spatial.display_stalls(calib, states)   # CLEAN calibrated layout + live occupancy
         taken = sum(states)
         open_n = len(states) - taken
         viz = annotate_stalls(frame, calib, xy, states)
@@ -139,18 +143,24 @@ def do_lot(model, calib, api, conf, imgsz, device, peaks, overlap=0.30):
         })
         return taken, int(len(xy))
 
-    cars, mask = spatial.map_cars(calib, xy)
+    # overlap-robust lot membership: boundary (straddling) cars ARE counted, frame-edge
+    # cars are flagged 'partial' (may be out of view) — classify once, reuse for the
+    # count + the annotated panel.
+    info = spatial.classify_cars(calib, xy, frame.shape)
+    counted = [c for c in info if c['status'] != 'out']
+    cars = [{'x': c['map'][0], 'y': c['map'][1], 'partial': c['partial']} for c in counted]
     inside = len(cars)
+    partial_n = sum(1 for c in counted if c['partial'])
     # capacity = careful per-lot floor, corrected UP by the most cars we've ever
     # counted there (real data, not a guess; self-improves as the lot fills).
     peak = max(int(peaks.get(calib['id'], 0)), inside)
     peaks[calib['id']] = peak
     capacity = max(calib['capacity'], peak)
-    viz = annotate_lot(frame, calib, xy, mask)
+    viz = annotate_lot(frame, calib, info)
     post(api, {
         'id': calib['id'], 'name': calib['name'], 'type': 'lot', 'surface': calib['surface'],
         'map': calib['map_size'], 'cars': cars, 'inside': inside, 'count': int(len(xy)),
-        'capacity': capacity, 'peak': peak, 'refresh_sec': calib['refresh_sec'],
+        'partial': partial_n, 'capacity': capacity, 'peak': peak, 'refresh_sec': calib['refresh_sec'],
         'image': to_data_uri(viz),
     })
     return inside, int(len(xy))
@@ -192,8 +202,9 @@ def main():
 
     # schedule: each source has its own next-due time so lots poll slowly, streets fast
     due = {}
-    for cid in calibs:
-        due[('lot', cid)] = 0.0
+    for cid, c in calibs.items():
+        if c.get('url'):                       # skip demo/offline calibs (e.g. paved-demo) — no live cam to poll
+            due[('lot', cid)] = 0.0
     for st in STREETS:
         due[('street', st['id'])] = 0.0
 
