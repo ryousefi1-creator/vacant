@@ -32,5 +32,6 @@
     380
   ],
   "capacity": 22,
-  "stalls": null
+  "stalls": null,
+  "tile": true
 }

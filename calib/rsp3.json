@@ -32,5 +32,6 @@
     320
   ],
   "capacity": 20,
-  "stalls": null
+  "stalls": null,
+  "tile": true
 }

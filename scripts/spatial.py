@@ -33,13 +33,70 @@ def project(H, pts):
     return cv2.perspectiveTransform(a, H).reshape(-1, 2)
 
 
+def detect(model, frame, conf, imgsz, device):
+    """Single-pass vehicle detection -> xyxy boxes (Nx4, image space)."""
+    r = model.predict(frame, classes=VEHICLE, conf=conf, imgsz=imgsz, verbose=False, device=device)[0]
+    return r.boxes.xyxy.cpu().numpy() if r.boxes is not None and len(r.boxes) else np.empty((0, 4), np.float32)
+
+
+def _nms(boxes, scores, iou_thr):
+    """Greedy IoU NMS (numpy, no torch dep) so duplicate boxes from overlapping tiles
+    collapse to one — matters for gravel CAR COUNTING where each box contact is a car."""
+    if len(boxes) == 0:
+        return []
+    x1, y1, x2, y2 = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
+    areas = (x2 - x1) * (y2 - y1)
+    order = scores.argsort()[::-1]
+    keep = []
+    while order.size:
+        i = order[0]
+        keep.append(int(i))
+        xx1 = np.maximum(x1[i], x1[order[1:]])
+        yy1 = np.maximum(y1[i], y1[order[1:]])
+        xx2 = np.minimum(x2[i], x2[order[1:]])
+        yy2 = np.minimum(y2[i], y2[order[1:]])
+        w = np.maximum(0.0, xx2 - xx1)
+        h = np.maximum(0.0, yy2 - yy1)
+        inter = w * h
+        iou = inter / (areas[i] + areas[order[1:]] - inter + 1e-9)
+        order = order[1:][iou <= iou_thr]
+    return keep
+
+
+def detect_tiled(model, frame, conf, imgsz, device, grid=3, tile_ov=0.2, iou=0.5):
+    """SAHI-style tiled detection: slice the frame into an overlapping grid so small/far
+    cars become large enough to detect at `imgsz`, pool all boxes back to full-frame
+    coords, then NMS the seam duplicates. For FAR/wide cams; close cams keep single-pass
+    detect() (tiling splits big foreground cars across seams -> false positives)."""
+    fh, fw = frame.shape[:2]
+    tw, th = fw / grid, fh / grid
+    px, py = tw * tile_ov, th * tile_ov
+    boxes, scores = [], []
+    for r in range(grid):
+        for c in range(grid):
+            x0, y0 = max(0, int(c * tw - px)), max(0, int(r * th - py))
+            x1, y1 = min(fw, int((c + 1) * tw + px)), min(fh, int((r + 1) * th + py))
+            res = model.predict(frame[y0:y1, x0:x1], classes=VEHICLE, conf=conf, imgsz=imgsz, verbose=False, device=device)[0]
+            if res.boxes is None or not len(res.boxes):
+                continue
+            for bx, sc in zip(res.boxes.xyxy.cpu().numpy(), res.boxes.conf.cpu().numpy()):
+                boxes.append([bx[0] + x0, bx[1] + y0, bx[2] + x0, bx[3] + y0])
+                scores.append(float(sc))
+    if not boxes:
+        return np.empty((0, 4), np.float32)
+    boxes = np.array(boxes, np.float32)
+    return boxes[_nms(boxes, np.array(scores, np.float32), iou)]
+
+
 # --- LOT REGION PARAMETERS (how a detected car is assigned to THIS lot) ----------
 # A camera sees more than its lot (road, neighbor spots, trees). The old test kept a
 # car only if its ground-contact POINT projected inside the quad — which DROPS a car
 # straddling the lot edge (contact lands just outside) even though it's parked here,
 # and says nothing about cars cut off by the frame. These explicit, tunable knobs
 # replace that single fragile point:
-INSIDE_OVERLAP = 0.50    # count a boundary/straddling car if >= this fraction of its box is inside the quad
+INSIDE_OVERLAP = 0.15    # count a boundary/straddling car if >= this fraction of its box is inside the quad
+                         # (0.50 dropped real edge-parked cars whose box only clips the quad; under-counting
+                         #  = over-reporting open spaces = the dangerous direction, so we count on any real touch)
 EDGE_MARGIN_PX = 3       # a box within this many px of a frame border is 'partial' (cut off / possibly out of view)
 
 

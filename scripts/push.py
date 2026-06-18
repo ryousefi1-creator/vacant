@@ -61,9 +61,14 @@ def fetch(url):
     return cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
 
 
-def detect(model, frame, conf, imgsz, device):
-    r = model.predict(frame, classes=spatial.VEHICLE, conf=conf, imgsz=imgsz, verbose=False, device=device)[0]
-    return r.boxes.xyxy.cpu().numpy() if r.boxes is not None and len(r.boxes) else np.empty((0, 4))
+def detect_lot(model, frame, calib, conf, lot_imgsz, tile_imgsz, tile_grid, device):
+    """Detect vehicles for a LOT. Tiling is opt-in per calib ("tile": true) to recover
+    small/far cars on wide gravel lots; close lots stay single-pass (tiling splits big
+    foreground cars). Per-calib "imgsz"/"tile_imgsz"/"tile_grid" override the CLI defaults."""
+    if calib.get('tile'):
+        return spatial.detect_tiled(model, frame, conf, int(calib.get('tile_imgsz', tile_imgsz)),
+                                    device, grid=int(calib.get('tile_grid', tile_grid)))
+    return spatial.detect(model, frame, conf, int(calib.get('imgsz', lot_imgsz)), device)
 
 
 def to_data_uri(viz, width=800):
@@ -120,11 +125,11 @@ def post(api, payload):
     urllib.request.urlopen(req, timeout=10).read()
 
 
-def do_lot(model, calib, api, conf, imgsz, device, peaks, overlap=0.30):
+def do_lot(model, calib, api, conf, imgsz, device, peaks, overlap=0.30, tile_imgsz=1280, tile_grid=3):
     frame = fetch(calib['url'])
     if frame is None:
         raise RuntimeError('no frame')
-    xy = detect(model, frame, conf, imgsz, device)
+    xy = detect_lot(model, frame, calib, conf, imgsz, tile_imgsz, tile_grid, device)
 
     # PAVED lots with real marked stalls -> EXACT per-stall occupancy (capacity is
     # the marked-stall count, open = # empty). The estimate/peak path below is only
@@ -170,7 +175,7 @@ def do_street(model, st, api, conf, imgsz, device):
     frame = fetch(st['url'])
     if frame is None:
         raise RuntimeError('no frame')
-    xy = detect(model, frame, conf, imgsz, device)
+    xy = spatial.detect(model, frame, conf, imgsz, device)
     viz = annotate_street(frame, xy)
     post(api, {
         'id': st['id'], 'name': st['name'], 'type': 'street',
@@ -188,6 +193,8 @@ def main():
     ap.add_argument('--imgsz', type=int, default=1280, help='street detection size')
     ap.add_argument('--lot-imgsz', type=int, default=1920, help='lot detection size (higher = catches more far cars)')
     ap.add_argument('--overlap', type=float, default=0.30, help='paved-stall occupancy threshold (box covers >= this frac of a stall)')
+    ap.add_argument('--tile-imgsz', type=int, default=1280, help='per-tile detection size for lots with "tile": true')
+    ap.add_argument('--tile-grid', type=int, default=3, help='NxN tile grid for tiled lots (3 = 9 tiles, the validated sweet spot)')
     ap.add_argument('--lot-interval', type=float, default=30, help='seconds between lot re-fetches (snapshots refresh slowly)')
     ap.add_argument('--street-interval', type=float, default=5, help='seconds between street re-fetches')
     ap.add_argument('--model', default='models/yolo11x.pt')
@@ -216,9 +223,12 @@ def main():
             try:
                 if kind == 'lot':
                     c = calibs[cid]
-                    inside, total = do_lot(model, c, args.api, args.conf, args.lot_imgsz, args.device, peaks, args.overlap)
+                    inside, total = do_lot(model, c, args.api, args.conf, args.lot_imgsz, args.device, peaks,
+                                           args.overlap, args.tile_imgsz, args.tile_grid)
                     save_peaks(peaks)
-                    print(f"  [lot] {c['name']}: {inside} in-lot ({total} detected, peak {peaks.get(cid)})", flush=True)
+                    g = c.get('tile_grid', args.tile_grid)
+                    tag = f" [tiled {g}x{g}]" if c.get('tile') else ''
+                    print(f"  [lot] {c['name']}:{tag} {inside} in-lot ({total} detected, peak {peaks.get(cid)})", flush=True)
                     due[(kind, cid)] = time.time() + args.lot_interval
                 else:
                     st = next(s for s in STREETS if s['id'] == cid)
