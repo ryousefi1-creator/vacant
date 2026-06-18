@@ -29,6 +29,7 @@ import numpy as np
 from ultralytics import YOLO
 
 import spatial
+import anonymize
 
 UA = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)'}
 NYC = 'https://webcams.nyctmc.org/api/cameras/{}/image'
@@ -67,7 +68,8 @@ def detect_lot(model, frame, calib, conf, lot_imgsz, tile_imgsz, tile_grid, devi
     foreground cars). Per-calib "imgsz"/"tile_imgsz"/"tile_grid" override the CLI defaults."""
     if calib.get('tile'):
         return spatial.detect_tiled(model, frame, conf, int(calib.get('tile_imgsz', tile_imgsz)),
-                                    device, grid=int(calib.get('tile_grid', tile_grid)))
+                                    device, grid=int(calib.get('tile_grid', tile_grid)),
+                                    full_imgsz=int(calib.get('imgsz', lot_imgsz)))
     return spatial.detect(model, frame, conf, int(calib.get('imgsz', lot_imgsz)), device)
 
 
@@ -130,6 +132,7 @@ def do_lot(model, calib, api, conf, imgsz, device, peaks, overlap=0.30, tile_img
     if frame is None:
         raise RuntimeError('no frame')
     xy = detect_lot(model, frame, calib, conf, imgsz, tile_imgsz, tile_grid, device)
+    frame = anonymize.anonymize(frame, device)   # blur plates + faces before this frame is posted
 
     # PAVED lots with real marked stalls -> EXACT per-stall occupancy (capacity is
     # the marked-stall count, open = # empty). The estimate/peak path below is only
@@ -176,6 +179,7 @@ def do_street(model, st, api, conf, imgsz, device):
     if frame is None:
         raise RuntimeError('no frame')
     xy = spatial.detect(model, frame, conf, imgsz, device)
+    frame = anonymize.anonymize(frame, device)   # blur plates + faces before this frame is posted
     viz = annotate_street(frame, xy)
     post(api, {
         'id': st['id'], 'name': st['name'], 'type': 'street',

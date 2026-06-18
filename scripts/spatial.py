@@ -39,9 +39,13 @@ def detect(model, frame, conf, imgsz, device):
     return r.boxes.xyxy.cpu().numpy() if r.boxes is not None and len(r.boxes) else np.empty((0, 4), np.float32)
 
 
-def _nms(boxes, scores, iou_thr):
-    """Greedy IoU NMS (numpy, no torch dep) so duplicate boxes from overlapping tiles
-    collapse to one — matters for gravel CAR COUNTING where each box contact is a car."""
+def _nms(boxes, scores, iou_thr=0.5, contain_thr=0.7):
+    """Greedy NMS (numpy, no torch dep). Suppresses a box if it overlaps a kept (higher-score)
+    box by IoU >= iou_thr OR is >= contain_thr CONTAINED inside it (intersection / smaller-box
+    area). The containment test is what collapses tile SHARDS of one big car: a half-car sliver
+    sits ~fully inside the whole-car box even though their IoU is low, so plain IoU-NMS would
+    keep both and over-count. Distinct adjacent cars rarely sit >70% inside each other, so they
+    survive."""
     if len(boxes) == 0:
         return []
     x1, y1, x2, y2 = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
@@ -51,41 +55,47 @@ def _nms(boxes, scores, iou_thr):
     while order.size:
         i = order[0]
         keep.append(int(i))
-        xx1 = np.maximum(x1[i], x1[order[1:]])
-        yy1 = np.maximum(y1[i], y1[order[1:]])
-        xx2 = np.minimum(x2[i], x2[order[1:]])
-        yy2 = np.minimum(y2[i], y2[order[1:]])
-        w = np.maximum(0.0, xx2 - xx1)
-        h = np.maximum(0.0, yy2 - yy1)
-        inter = w * h
-        iou = inter / (areas[i] + areas[order[1:]] - inter + 1e-9)
-        order = order[1:][iou <= iou_thr]
+        rest = order[1:]
+        xx1 = np.maximum(x1[i], x1[rest]); yy1 = np.maximum(y1[i], y1[rest])
+        xx2 = np.minimum(x2[i], x2[rest]); yy2 = np.minimum(y2[i], y2[rest])
+        inter = np.maximum(0.0, xx2 - xx1) * np.maximum(0.0, yy2 - yy1)
+        iou = inter / (areas[i] + areas[rest] - inter + 1e-9)
+        contain = inter / (np.minimum(areas[i], areas[rest]) + 1e-9)
+        order = rest[(iou <= iou_thr) & (contain <= contain_thr)]
     return keep
 
 
-def detect_tiled(model, frame, conf, imgsz, device, grid=3, tile_ov=0.2, iou=0.5):
-    """SAHI-style tiled detection: slice the frame into an overlapping grid so small/far
-    cars become large enough to detect at `imgsz`, pool all boxes back to full-frame
-    coords, then NMS the seam duplicates. For FAR/wide cams; close cams keep single-pass
-    detect() (tiling splits big foreground cars across seams -> false positives)."""
+def detect_tiled(model, frame, conf, imgsz, device, grid=3, tile_ov=0.2, full_imgsz=1920):
+    """SAHI-style detection. A FULL-FRAME pass (whole near/big cars as single boxes) pooled
+    with an overlapping GRID of tiles (small/far cars become big enough to detect at `imgsz`),
+    then greedy NMS with containment so tile shards of a big car collapse back into its
+    whole-frame box. The full-frame pass is the fix for a near car LARGER than one tile being
+    sliced across seams and counted several times — the whole-car box from the full pass
+    swallows the shards. For FAR/wide cams; close cams can skip tiling entirely."""
     fh, fw = frame.shape[:2]
+    boxes, scores = [], []
+
+    def collect(res, ox=0, oy=0):
+        if res.boxes is None or not len(res.boxes):
+            return
+        for bx, sc in zip(res.boxes.xyxy.cpu().numpy(), res.boxes.conf.cpu().numpy()):
+            boxes.append([bx[0] + ox, bx[1] + oy, bx[2] + ox, bx[3] + oy])
+            scores.append(float(sc))
+
+    # full-frame pass: whole big/near cars (one box each, even if larger than a tile)
+    collect(model.predict(frame, classes=VEHICLE, conf=conf, imgsz=full_imgsz, verbose=False, device=device)[0])
+    # tiles: recover small/far cars the full pass misses
     tw, th = fw / grid, fh / grid
     px, py = tw * tile_ov, th * tile_ov
-    boxes, scores = [], []
     for r in range(grid):
         for c in range(grid):
             x0, y0 = max(0, int(c * tw - px)), max(0, int(r * th - py))
             x1, y1 = min(fw, int((c + 1) * tw + px)), min(fh, int((r + 1) * th + py))
-            res = model.predict(frame[y0:y1, x0:x1], classes=VEHICLE, conf=conf, imgsz=imgsz, verbose=False, device=device)[0]
-            if res.boxes is None or not len(res.boxes):
-                continue
-            for bx, sc in zip(res.boxes.xyxy.cpu().numpy(), res.boxes.conf.cpu().numpy()):
-                boxes.append([bx[0] + x0, bx[1] + y0, bx[2] + x0, bx[3] + y0])
-                scores.append(float(sc))
+            collect(model.predict(frame[y0:y1, x0:x1], classes=VEHICLE, conf=conf, imgsz=imgsz, verbose=False, device=device)[0], x0, y0)
     if not boxes:
         return np.empty((0, 4), np.float32)
     boxes = np.array(boxes, np.float32)
-    return boxes[_nms(boxes, np.array(scores, np.float32), iou)]
+    return boxes[_nms(boxes, np.array(scores, np.float32))]
 
 
 # --- LOT REGION PARAMETERS (how a detected car is assigned to THIS lot) ----------
