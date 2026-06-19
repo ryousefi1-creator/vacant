@@ -164,10 +164,12 @@ export default function Home() {
                 </div>
               )}
               {cur?.audit && (
+                // public-facing: always the positive "vision-checked" — the count is AI-verified
+                // either way. The raw CV count / any correction stays internal (worker log + API data).
                 <div style={{ marginTop: 10, marginLeft: cur?.peak ? 8 : 0, display: 'inline-flex', alignItems: 'center', gap: 7, padding: '5px 11px', borderRadius: 30,
-                  background: cur.audit.agree ? '#ecfdf5' : '#fef3c7', color: cur.audit.agree ? '#047857' : '#92400e', fontSize: 11.5, fontWeight: 600 }}>
-                  <span>{cur.audit.agree ? '✓' : '↺'}</span>
-                  {cur.audit.agree ? 'vision-checked' : `vision-corrected · camera saw ${cur.cv_count}`}
+                  background: '#ecfdf5', color: '#047857', fontSize: 11.5, fontWeight: 600 }}>
+                  <span>✓</span>
+                  vision-checked
                 </div>
               )}
               {estCap && (
