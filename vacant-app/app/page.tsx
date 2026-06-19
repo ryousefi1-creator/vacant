@@ -23,7 +23,7 @@ export default function Home() {
   const [data, setData] = useState<Record<string, Occ>>({});
   const [active, setActive] = useState<string | null>(null);
   const [now, setNow] = useState(0);
-  const [view3d, setView3d] = useState(true);
+  const [view3d, setView3d] = useState(false);
 
   useEffect(() => {
     let on = true;
