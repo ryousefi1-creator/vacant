@@ -30,6 +30,7 @@ from ultralytics import YOLO
 
 import spatial
 import anonymize
+import vision
 
 UA = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)'}
 NYC = 'https://webcams.nyctmc.org/api/cameras/{}/image'
@@ -127,7 +128,8 @@ def post(api, payload):
     urllib.request.urlopen(req, timeout=10).read()
 
 
-def do_lot(model, calib, api, conf, imgsz, device, peaks, overlap=0.30, tile_imgsz=1280, tile_grid=3):
+def do_lot(model, calib, api, conf, imgsz, device, peaks, overlap=0.30, tile_imgsz=1280, tile_grid=3,
+           audit_key=None, audit_model='claude-sonnet-4-6', audits=None, audit_gap=600):
     frame = fetch(calib['url'])
     if frame is None:
         raise RuntimeError('no frame')
@@ -155,12 +157,37 @@ def do_lot(model, calib, api, conf, imgsz, device, peaks, overlap=0.30, tile_img
     # cars are flagged 'partial' (may be out of view) — classify once, reuse for the
     # count + the annotated panel.
     info = spatial.classify_cars(calib, xy, frame.shape)
-    counted = [c for c in info if c['status'] != 'out']
+    counted = sorted((c for c in info if c['status'] != 'out'),
+                     key=lambda c: (c['box'][2] - c['box'][0]) * (c['box'][3] - c['box'][1]), reverse=True)
     cars = [{'x': c['map'][0], 'y': c['map'][1], 'partial': c['partial']} for c in counted]
-    inside = len(cars)
-    partial_n = sum(1 for c in counted if c['partial'])
-    # capacity = careful per-lot floor, corrected UP by the most cars we've ever
-    # counted there (real data, not a guess; self-improves as the lot fills).
+    cv_inside = len(cars)
+    inside = cv_inside
+
+    # --- Claude-vision audit (cost-bounded: audit a lot only when its count CHANGES, throttled per
+    # lot by audit_gap). On an OVERCOUNT (the big-foreground-car fragmentation), trust the lower
+    # second-opinion count and keep the largest-box cars so the map matches the headline number. ---
+    audit_out = None
+    if audit_key is not None and audits is not None:
+        st = audits.get(calib['id'], {})
+        now = time.time()
+        due = (st.get('cv') != cv_inside or 'claude' not in st or now - st.get('t', 0) > 3600)
+        if due and now - st.get('t', 0) > audit_gap:
+            try:
+                _, jb = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                st = {'cv': cv_inside, 'claude': vision.claude_count(audit_key, jb.tobytes(), audit_model), 't': now}
+                audits[calib['id']] = st
+                cc0 = st['claude']
+                print(f"   vision-audit {calib['id']}: cv={cv_inside} claude={cc0}", flush=True)
+            except Exception as e:
+                print(f"   audit skip {calib['id']}: {type(e).__name__} {e}", flush=True)
+        cc = st.get('claude')
+        if cc is not None:
+            agree = abs(cv_inside - cc) <= 1
+            audit_out = {'claude': cc, 'agree': bool(agree), 't': int(st.get('t', 0))}
+            if not agree and cc < cv_inside:
+                inside, cars = cc, cars[:cc]
+
+    partial_n = sum(1 for c in cars if c['partial'])
     peak = max(int(peaks.get(calib['id'], 0)), inside)
     peaks[calib['id']] = peak
     capacity = max(calib['capacity'], peak)
@@ -169,7 +196,7 @@ def do_lot(model, calib, api, conf, imgsz, device, peaks, overlap=0.30, tile_img
         'id': calib['id'], 'name': calib['name'], 'type': 'lot', 'surface': calib['surface'],
         'map': calib['map_size'], 'cars': cars, 'inside': inside, 'count': int(len(xy)),
         'partial': partial_n, 'capacity': capacity, 'peak': peak, 'refresh_sec': calib['refresh_sec'],
-        'image': to_data_uri(viz),
+        'cv_count': cv_inside, 'audit': audit_out, 'image': to_data_uri(viz),
     })
     return inside, int(len(xy))
 
@@ -202,10 +229,17 @@ def main():
     ap.add_argument('--lot-interval', type=float, default=30, help='seconds between lot re-fetches (snapshots refresh slowly)')
     ap.add_argument('--street-interval', type=float, default=5, help='seconds between street re-fetches')
     ap.add_argument('--model', default='models/yolo11x.pt')
+    ap.add_argument('--audit', action='store_true', help='enable the Claude-vision count audit (cost-bounded: audits a lot only when its count changes)')
+    ap.add_argument('--audit-model', default='claude-sonnet-4-6', help='vision model for the audit')
+    ap.add_argument('--audit-gap', type=float, default=600, help='min seconds between audits of the SAME lot (hard cost throttle)')
     args = ap.parse_args()
 
     calibs = spatial.load_calibs('calib')
     peaks = load_peaks()
+    audit_key = vision.load_key() if args.audit else None
+    audits = {}
+    if args.audit:
+        print(f'vision audit ON ({args.audit_model}, >= {args.audit_gap:.0f}s between same-lot checks)', flush=True)
     model = YOLO(args.model)
     print(f'worker up: {len(calibs)} calibrated lots + {len(STREETS)} streets -> {args.api}', flush=True)
     if not calibs:
@@ -228,7 +262,8 @@ def main():
                 if kind == 'lot':
                     c = calibs[cid]
                     inside, total = do_lot(model, c, args.api, args.conf, args.lot_imgsz, args.device, peaks,
-                                           args.overlap, args.tile_imgsz, args.tile_grid)
+                                           args.overlap, args.tile_imgsz, args.tile_grid,
+                                           audit_key, args.audit_model, audits, args.audit_gap)
                     save_peaks(peaks)
                     g = c.get('tile_grid', args.tile_grid)
                     tag = f" [tiled {g}x{g}]" if c.get('tile') else ''

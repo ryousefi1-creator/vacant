@@ -17,6 +17,7 @@ type Occ = {
   count: number; inside: number | null; cars: Car[] | null; map: [number, number] | null;
   stalls: Stall[] | null;
   capacity: number | null; peak: number | null; refresh_sec: number | null; image: string | null;
+  cv_count?: number | null; audit?: { claude: number; agree: boolean; t: number } | null;
 };
 
 const url = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
@@ -65,6 +66,10 @@ export async function POST(request: Request) {
     capacity: b.capacity == null ? null : Number(b.capacity) || 0,
     peak: b.peak == null ? null : Number(b.peak) || 0,
     refresh_sec: b.refresh_sec == null ? null : Number(b.refresh_sec) || 0,
+    cv_count: b.cv_count == null ? null : Number(b.cv_count),
+    audit: b.audit && typeof b.audit === 'object'
+      ? { claude: Number(b.audit.claude) || 0, agree: !!b.audit.agree, t: Number(b.audit.t) || 0 }
+      : null,
     image: typeof b.image === 'string' ? b.image : null,
   });
   return Response.json({ ok: true });

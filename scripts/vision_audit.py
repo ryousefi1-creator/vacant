@@ -30,42 +30,9 @@ from ultralytics import YOLO
 import spatial
 from push import fetch, annotate_lot, detect_lot
 
-API = 'https://api.anthropic.com/v1/messages'
+from vision import load_key, claude_count
+
 LOG = 'work/vision_audit_log.json'
-PROMPT = (
-    "You are auditing an automated parking-lot car counter. Count the DISTINCT PARKED "
-    "vehicles (cars, vans, SUVs, pickups) clearly in this parking lot. Count each physical "
-    "vehicle exactly once, even if partly occluded or cut off by the frame edge. Do NOT count "
-    "vehicles driving on roads far in the background. Reply with ONLY one integer."
-)
-
-
-def load_key():
-    k = os.environ.get('ANTHROPIC_API_KEY')
-    if k:
-        return k
-    p = os.path.expanduser('~/marketing/htk-v2/.env')
-    if os.path.exists(p):
-        for line in open(p):
-            if line.startswith('ANTHROPIC_API_KEY'):
-                return line.split('=', 1)[1].strip().strip('"').strip("'")
-    raise SystemExit('no ANTHROPIC_API_KEY (set env or ~/marketing/htk-v2/.env)')
-
-
-def claude_count(key, frame_jpg, model):
-    body = json.dumps({
-        'model': model, 'max_tokens': 16,
-        'messages': [{'role': 'user', 'content': [
-            {'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/jpeg',
-                                         'data': base64.b64encode(frame_jpg).decode()}},
-            {'type': 'text', 'text': PROMPT},
-        ]}],
-    }).encode()
-    req = urllib.request.Request(API, data=body, method='POST', headers={
-        'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json'})
-    r = json.load(urllib.request.urlopen(req, timeout=45))
-    m = re.search(r'\d+', r['content'][0]['text'])
-    return int(m.group()) if m else None
 
 
 def audit(model_yolo, calib, key, model_vlm, device='mps'):

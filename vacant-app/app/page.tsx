@@ -10,6 +10,7 @@ type Occ = {
   count: number; inside: number | null; cars: Car[] | null; map: [number, number] | null;
   stalls: Stall[] | null;
   capacity: number | null; peak: number | null; refresh_sec: number | null; image: string | null;
+  cv_count?: number | null; audit?: { claude: number; agree: boolean; t: number } | null;
 };
 
 function cadence(refresh: number | null): string {
@@ -160,6 +161,13 @@ export default function Home() {
                 <div style={{ marginTop: 10, display: 'inline-flex', alignItems: 'center', gap: 7, padding: '5px 11px', borderRadius: 30, background: '#ecfdf5', color: '#047857', fontSize: 11.5, fontWeight: 600 }}>
                   <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#10b981' }} />
                   busiest measured here: {cur.peak} car{cur.peak !== 1 ? 's' : ''}
+                </div>
+              )}
+              {cur?.audit && (
+                <div style={{ marginTop: 10, marginLeft: cur?.peak ? 8 : 0, display: 'inline-flex', alignItems: 'center', gap: 7, padding: '5px 11px', borderRadius: 30,
+                  background: cur.audit.agree ? '#ecfdf5' : '#fef3c7', color: cur.audit.agree ? '#047857' : '#92400e', fontSize: 11.5, fontWeight: 600 }}>
+                  <span>{cur.audit.agree ? '✓' : '↺'}</span>
+                  {cur.audit.agree ? 'vision-checked' : `vision-corrected · camera saw ${cur.cv_count}`}
                 </div>
               )}
               {estCap && (
