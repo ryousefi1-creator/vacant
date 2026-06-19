@@ -45,3 +45,17 @@ def claude_count(key, frame_jpg, model='claude-sonnet-4-6', timeout=45):
     r = json.load(urllib.request.urlopen(req, timeout=timeout))
     m = re.search(r'\d+', r['content'][0]['text'])
     return int(m.group()) if m else None
+
+
+def claude_vision(key, images_jpg, prompt, model='claude-opus-4-8', max_tokens=1200, timeout=70):
+    """Send N JPEG frames + a prompt to Claude vision; return the raw text reply. Used by the
+    layout learner to reverse-engineer a lot's real geometry from one or more camera angles."""
+    content = [{'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/jpeg',
+                                            'data': base64.b64encode(im).decode()}} for im in images_jpg]
+    content.append({'type': 'text', 'text': prompt})
+    body = json.dumps({'model': model, 'max_tokens': max_tokens,
+                       'messages': [{'role': 'user', 'content': content}]}).encode()
+    req = urllib.request.Request(API, data=body, method='POST', headers={
+        'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json'})
+    r = json.load(urllib.request.urlopen(req, timeout=timeout))
+    return r['content'][0]['text']

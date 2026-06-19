@@ -1,0 +1,44 @@
+{
+  "shape": "irregular - roughly rectangular lot with angled landscaped islands subdividing the gravel field",
+  "surface": "gravel",
+  "rows": [
+    {
+      "id": 1,
+      "stalls": 8,
+      "orientation": "cars nose-to-tail run left-right",
+      "where": "front, left",
+      "angle_deg": 75
+    },
+    {
+      "id": 2,
+      "stalls": 6,
+      "orientation": "cars nose-to-tail run left-right",
+      "where": "middle, center",
+      "angle_deg": 70
+    },
+    {
+      "id": 3,
+      "stalls": 6,
+      "orientation": "cars nose-to-tail run left-right",
+      "where": "back, right",
+      "angle_deg": 60
+    }
+  ],
+  "drive_aisles": 2,
+  "capacity_est": 20,
+  "entrance": "from the road/driveway on the right side near the picnic shelter, connecting to the paved sidewalk loop",
+  "landmarks": [
+    "curb islands with shrubs and boulders",
+    "central shade tree island",
+    "picnic shelter (right)",
+    "bike racks",
+    "wood post-and-rail fence",
+    "trash receptacle",
+    "concrete sidewalk on right edge",
+    "pedestrian crossing sign"
+  ],
+  "proportions": {
+    "width_to_depth": "2.2 : 1"
+  },
+  "notes": "Real shape is a wide shallow gravel lot bordered by a wood rail fence at the rear (north) and a concrete sidewalk/curb on the right (east) leading to a picnic shelter. Multiple landscaped islands (boulders, lavender/sage shrubs, single trees) break up the parking field rather than a clean grid. Parking stalls are marked by short wheel-stop curbs and run in shallow rows facing the fence/view. The camera is mounted high on the south/near corner; nearest corner is front-right where the Subaru Outback and Forester park. Lot slopes gently down toward the open green space and housing development to the north. Stalls are mostly perpendicular pull-in against curb stops, not parallel."
+}
