@@ -182,9 +182,9 @@ def do_lot(model, calib, api, conf, imgsz, device, peaks, overlap=0.30, tile_img
                 print(f"   audit skip {calib['id']}: {type(e).__name__} {e}", flush=True)
         cc = st.get('claude')
         if cc is not None:
-            agree = abs(cv_inside - cc) <= 1
-            audit_out = {'claude': cc, 'agree': bool(agree), 't': int(st.get('t', 0))}
-            if not agree and cc < cv_inside:
+            over = cc < cv_inside    # YOLO overcounted -> trust the lower vision count (ANY amount, incl. off-by-1)
+            audit_out = {'claude': cc, 'agree': not over, 't': int(st.get('t', 0))}
+            if over:
                 inside, cars = cc, cars[:cc]
 
     partial_n = sum(1 for c in cars if c['partial'])
