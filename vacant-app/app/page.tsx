@@ -117,7 +117,7 @@ export default function Home() {
               {(['3d', 'iso'] as const).map((v) => {
                 const on = view3d === (v === '3d');
                 return (
-                  <button key={v} onClick={() => setView3d(v === '3d')} style={{
+                  <button key={v} data-v={v} onClick={() => setView3d(v === '3d')} style={{
                     cursor: 'pointer', border: 'none', borderRadius: 8, padding: '5px 12px', fontSize: 12, fontWeight: 700,
                     background: on ? 'linear-gradient(160deg,#10b981,#059669)' : 'transparent', color: on ? '#fff' : '#6b7a8d' }}>
                     {v === '3d' ? '3D' : '2D'}

@@ -1,113 +1,158 @@
 'use client';
-// Navigable 3D digital-twin of a lot. Orbit / pan / zoom with the mouse (OrbitControls).
-// GRAVEL: a car box at each detected car's TRUE position (homography-projected x,y).
-// PAVED:  each marked stall as a pad (emerald = open, dark = taken) + a car on taken ones.
-// Three.js is fine here because this is the HOSTED Next app, not a file:// page. The
-// <Canvas> is gated behind a mount flag so it never renders during SSR (no window/WebGL).
+// Navigable cartoonish-realistic 3D lot. Orbit / pan / zoom with the mouse.
+//  - asphalt slab + painted stall lines + wheel stops + a curb + a little landscaping (NO grid).
+//  - GRAVEL: generate a stall layout from capacity and snap each detected car to the nearest free
+//    stall (same logic as the 2D map) so a car on the right shows on the right.
+//  - PAVED: use the real marked stalls.
+// Vacant stalls glow emerald; taken stalls get a little car. Three.js is fine here (hosted Next app);
+// the <Canvas> is mount-gated so it never renders during SSR.
 import { useEffect, useMemo, useState } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 
 type Car = { x: number; y: number };
 type Stall = { poly: [number, number][]; taken: boolean };
+type Props = {
+  map: [number, number] | null; cars: Car[] | null; surface: string | null;
+  capacity: number | null; stalls: Stall[] | null;
+};
 
-const CAR_COLORS = ['#3a4654', '#c0492f', '#2f6fb0', '#1f7a5a', '#d7a13a', '#cfd6dd', '#7a8694', '#b23b3b'];
-const SPAN = 14;            // world size of the lot's long axis
+const CAR_COLORS = ['#c0492f', '#2f6fb0', '#1f7a5a', '#d7a13a', '#cfd6dd', '#7a8694', '#b23b3b', '#3a4654'];
 const hash = (s: string) => { let h = 0; for (const c of s) h = (h * 33 + c.charCodeAt(0)) >>> 0; return h; };
-function darker(hex: string, f: number) {
+const dark = (hex: string, f: number) => {
   const n = parseInt(hex.slice(1), 16);
   return `rgb(${(((n >> 16) & 255) * f) | 0},${(((n >> 8) & 255) * f) | 0},${((n & 255) * f) | 0})`;
+};
+
+function factorGrid(cap: number): [number, number] {
+  cap = Math.max(4, Math.min(60, Math.round(cap)));
+  let best: [number, number] = [cap, 1], bestScore = 1e9;
+  for (let r = 2; r <= 7; r++) {
+    const c = Math.round(cap / r);
+    if (c < 2) continue;
+    const score = Math.abs(c * r - cap) * 2 + Math.abs(c / r - 2.0);
+    if (score < bestScore) { bestScore = score; best = [c, r]; }
+  }
+  return best;
 }
 
-function Car3D({ x, z, len, color, rot }: { x: number; z: number; len: number; color: string; rot: number }) {
-  const w = len * 0.46, h = len * 0.3;
+const SW = 2.0, SD = 4.2, AISLE = 3.2;   // stall width, depth, drive aisle (world units)
+
+function CarMesh({ x, z, color, rot }: { x: number; z: number; color: string; rot: number }) {
+  const body = dark(color, 0.92), cab = dark(color, 0.62);
   return (
     <group position={[x, 0, z]} rotation-y={rot}>
-      <mesh castShadow position={[0, h * 0.55, 0]}>
-        <boxGeometry args={[w, h, len]} />
-        <meshStandardMaterial color={color} metalness={0.25} roughness={0.5} />
-      </mesh>
-      <mesh castShadow position={[0, h * 1.08, -len * 0.04]}>
-        <boxGeometry args={[w * 0.86, h * 0.62, len * 0.5]} />
-        <meshStandardMaterial color={darker(color, 0.5)} metalness={0.1} roughness={0.35} />
-      </mesh>
+      <mesh castShadow position={[0, 0.42, 0]}><boxGeometry args={[1.5, 0.62, 3.2]} /><meshStandardMaterial color={body} metalness={0.3} roughness={0.45} /></mesh>
+      <mesh castShadow position={[0, 0.92, -0.12]}><boxGeometry args={[1.32, 0.56, 1.5]} /><meshStandardMaterial color={cab} metalness={0.2} roughness={0.3} /></mesh>
+      <mesh position={[0, 0.95, -0.12]}><boxGeometry args={[1.34, 0.4, 1.2]} /><meshStandardMaterial color="#bcd2e0" metalness={0.1} roughness={0.1} opacity={0.85} transparent /></mesh>
+      {[[-0.72, 1.05], [0.72, 1.05], [-0.72, -1.05], [0.72, -1.05]].map(([wx, wz], i) => (
+        <mesh key={i} position={[wx, 0.18, wz]} rotation-z={Math.PI / 2}><cylinderGeometry args={[0.26, 0.26, 0.18, 14]} /><meshStandardMaterial color="#15181c" roughness={0.7} /></mesh>
+      ))}
+    </group>
+  );
+}
+
+function Tree({ x, z, s = 1 }: { x: number; z: number; s?: number }) {
+  return (
+    <group position={[x, 0, z]} scale={s}>
+      <mesh castShadow position={[0, 0.5, 0]}><cylinderGeometry args={[0.16, 0.22, 1, 7]} /><meshStandardMaterial color="#6b4f2a" roughness={0.9} /></mesh>
+      <mesh castShadow position={[0, 1.6, 0]}><icosahedronGeometry args={[1.05, 0]} /><meshStandardMaterial color="#3f8f4f" roughness={0.85} flatShading /></mesh>
     </group>
   );
 }
 
 function Scene({ map, cars, surface, capacity, stalls }: Props) {
   const built = useMemo(() => {
-    // derive the lot extent (map size, or the stalls' bounding box) -> world scale
     let mw = map?.[0] ?? 0, mh = map?.[1] ?? 0;
-    if ((!mw || !mh) && stalls?.length) {
-      const xs = stalls.flatMap((s) => s.poly.map((p) => p[0])), ys = stalls.flatMap((s) => s.poly.map((p) => p[1]));
-      mw = Math.max(...xs); mh = Math.max(...ys);
-    }
-    if (!mw || !mh) return null;
-    const sc = SPAN / Math.max(mw, mh);
-    const gw = mw * sc, gd = mh * sc;
-    const wx = (x: number) => (x - mw / 2) * sc, wz = (y: number) => (y - mh / 2) * sc;
-
-    const carItems: { x: number; z: number; len: number; color: string; rot: number; key: string }[] = [];
-    const padItems: { x: number; z: number; w: number; d: number; key: string }[] = [];
+    const spots: { x: number; z: number; rot: number; occ: boolean; color: string }[] = [];
 
     if (stalls?.length) {
-      const sizes = stalls.map((s) => {
-        const xs = s.poly.map((p) => p[0]), ys = s.poly.map((p) => p[1]);
-        return Math.max(...xs) - Math.min(...xs);
-      }).sort((a, b) => a - b);
-      const len = (sizes[Math.floor(sizes.length / 2)] || mw / 12) * sc * 0.82;
+      mw = mw || Math.max(...stalls.flatMap((s) => s.poly.map((p) => p[0])));
+      mh = mh || Math.max(...stalls.flatMap((s) => s.poly.map((p) => p[1])));
+      const sc = 24 / Math.max(mw, mh);
       stalls.forEach((s, i) => {
         const xs = s.poly.map((p) => p[0]), ys = s.poly.map((p) => p[1]);
-        const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
-        if (s.taken) carItems.push({ x: wx(cx), z: wz(cy), len, color: CAR_COLORS[hash('s' + i) % CAR_COLORS.length], rot: 0, key: 's' + i });
-        else padItems.push({ x: wx(cx), z: wz(cy), w: len * 0.9, d: len * 1.7, key: 'p' + i });
+        const cx = ((Math.min(...xs) + Math.max(...xs)) / 2 - mw / 2) * sc;
+        const cz = ((Math.min(...ys) + Math.max(...ys)) / 2 - mh / 2) * sc;
+        spots.push({ x: cx, z: cz, rot: 0, occ: s.taken, color: CAR_COLORS[hash('s' + i) % CAR_COLORS.length] });
       });
-    } else if (cars?.length) {
-      const len = SPAN * 0.05;
-      cars.forEach((c, i) => carItems.push({
-        x: wx(c.x), z: wz(c.y), len, color: CAR_COLORS[hash(`${c.x.toFixed(1)}-${c.y.toFixed(1)}`) % CAR_COLORS.length],
-        rot: ((hash(`${i}-${c.x}`) % 7) - 3) * 0.04, key: 'c' + i,
-      }));
+    } else {
+      const [C, R] = factorGrid(capacity || Math.max(8, (cars?.length ?? 0) + 4));
+      const occ = new Array(C * R).fill(false);
+      // each row of stalls separated by a drive aisle; stall grid centered at origin
+      const rowPitch = SD + AISLE;
+      const W = C * SW, D = R * rowPitch;
+      const pos = (c: number, r: number) => ({ x: (c + 0.5) * SW - W / 2, z: (r + 0.5) * rowPitch - D / 2 });
+      for (const car of (cars ?? [])) {
+        const cx = mw ? car.x / mw : 0.5, cy = mh ? car.y / mh : 0.5;
+        let bi = -1, bd = 1e9;
+        for (let r = 0; r < R; r++) for (let c = 0; c < C; c++) {
+          const i = r * C + c; if (occ[i]) continue;
+          const dd = (cx - (c + 0.5) / C) ** 2 + (cy - (r + 0.5) / R) ** 2;
+          if (dd < bd) { bd = dd; bi = i; }
+        }
+        if (bi >= 0) occ[bi] = true;
+      }
+      for (let r = 0; r < R; r++) for (let c = 0; c < C; c++) {
+        const i = r * C + c, p = pos(c, r);
+        spots.push({ x: p.x, z: p.z, rot: 0, occ: occ[i], color: CAR_COLORS[hash(c + '-' + r) % CAR_COLORS.length] });
+      }
     }
-    return { gw, gd, carItems, padItems };
+    const xs = spots.map((s) => s.x), zs = spots.map((s) => s.z);
+    const halfW = (Math.max(...xs) - Math.min(...xs)) / 2 + SW, halfD = (Math.max(...zs) - Math.min(...zs)) / 2 + SD;
+    return { spots, halfW: Math.max(halfW, 4), halfD: Math.max(halfD, 4) };
   }, [map, cars, surface, capacity, stalls]);
 
-  if (!built) return null;
-  const ground = surface === 'paved' ? '#3a4150' : '#9a8567';
+  if (!built.spots.length) return null;
+  const { spots, halfW, halfD } = built;
+  const W = halfW * 2 + 2, D = halfD * 2 + 2;
+
   return (
     <>
-      <ambientLight intensity={0.75} />
-      <directionalLight position={[SPAN * 0.5, SPAN, SPAN * 0.4]} intensity={1.15} castShadow
-        shadow-mapSize-width={1024} shadow-mapSize-height={1024}
-        shadow-camera-left={-SPAN} shadow-camera-right={SPAN} shadow-camera-top={SPAN} shadow-camera-bottom={-SPAN} />
-      <mesh rotation-x={-Math.PI / 2} receiveShadow>
-        <planeGeometry args={[built.gw + 2, built.gd + 2]} />
-        <meshStandardMaterial color={ground} roughness={0.95} />
+      <ambientLight intensity={0.8} />
+      <directionalLight position={[halfW, 18, -halfD]} intensity={1.2} castShadow
+        shadow-mapSize-width={2048} shadow-mapSize-height={2048}
+        shadow-camera-left={-W} shadow-camera-right={W} shadow-camera-top={D} shadow-camera-bottom={-D} />
+      <hemisphereLight args={['#cfe8ff', '#6b6256', 0.4]} />
+
+      {/* asphalt slab */}
+      <mesh rotation-x={-Math.PI / 2} receiveShadow position={[0, 0, 0]}>
+        <planeGeometry args={[W, D]} /><meshStandardMaterial color="#3c424b" roughness={0.95} />
       </mesh>
-      <gridHelper args={[Math.max(built.gw, built.gd) + 2, 16, '#ffffff', '#ffffff']} position={[0, 0.01, 0]}>
-        <lineBasicMaterial transparent opacity={0.07} />
-      </gridHelper>
-      {built.padItems.map((p) => (
-        <mesh key={p.key} rotation-x={-Math.PI / 2} position={[p.x, 0.02, p.z]} receiveShadow>
-          <planeGeometry args={[p.w, p.d]} />
-          <meshStandardMaterial color="#10b981" emissive="#10b981" emissiveIntensity={0.35} transparent opacity={0.78} />
-        </mesh>
+      {/* curb border */}
+      {[[0, D / 2], [0, -D / 2]].map(([x, z], i) => (
+        <mesh key={'cz' + i} position={[x, 0.12, z]}><boxGeometry args={[W, 0.24, 0.3]} /><meshStandardMaterial color="#c8ccd2" roughness={0.8} /></mesh>
       ))}
-      {built.carItems.map(({ key, ...c }) => <Car3D key={key} {...c} />)}
+      {[[W / 2, 0], [-W / 2, 0]].map(([x, z], i) => (
+        <mesh key={'cx' + i} position={[x, 0.12, z]}><boxGeometry args={[0.3, 0.24, D]} /><meshStandardMaterial color="#c8ccd2" roughness={0.8} /></mesh>
+      ))}
+      {/* grass apron */}
+      <mesh rotation-x={-Math.PI / 2} position={[0, -0.02, 0]} receiveShadow>
+        <planeGeometry args={[W + 8, D + 8]} /><meshStandardMaterial color="#5f9352" roughness={1} />
+      </mesh>
+
+      {spots.map((s, i) => (
+        <group key={i} position={[s.x, 0, s.z]}>
+          {/* painted stall lines: two sides + back */}
+          <mesh rotation-x={-Math.PI / 2} position={[-SW / 2 + 0.05, 0.02, 0]}><planeGeometry args={[0.1, SD]} /><meshStandardMaterial color="#eef2f5" /></mesh>
+          <mesh rotation-x={-Math.PI / 2} position={[SW / 2 - 0.05, 0.02, 0]}><planeGeometry args={[0.1, SD]} /><meshStandardMaterial color="#eef2f5" /></mesh>
+          {/* vacant glow / wheel stop */}
+          {s.occ
+            ? <mesh position={[0, 0.08, SD / 2 - 0.4]}><boxGeometry args={[SW * 0.7, 0.16, 0.18]} /><meshStandardMaterial color="#20242b" roughness={0.8} /></mesh>
+            : <mesh rotation-x={-Math.PI / 2} position={[0, 0.025, 0]}><planeGeometry args={[SW - 0.3, SD - 0.4]} /><meshStandardMaterial color="#10b981" emissive="#10b981" emissiveIntensity={0.4} transparent opacity={0.6} /></mesh>}
+          {s.occ && <CarMesh x={0} z={0} color={s.color} rot={0} />}
+        </group>
+      ))}
+
+      <Tree x={-halfW - 2.5} z={-halfD - 1} s={1.2} />
+      <Tree x={halfW + 2.5} z={halfD + 1} s={1} />
+      <Tree x={halfW + 2} z={-halfD - 2} s={0.85} />
+
       <OrbitControls makeDefault enablePan enableZoom target={[0, 0, 0]}
-        maxPolarAngle={1.45} minDistance={SPAN * 0.35} maxDistance={SPAN * 2.6} />
+        maxPolarAngle={1.45} minDistance={Math.max(W, D) * 0.32} maxDistance={Math.max(W, D) * 1.8} />
     </>
   );
 }
-
-type Props = {
-  map: [number, number] | null;
-  cars: Car[] | null;
-  surface: string | null;
-  capacity: number | null;
-  stalls: Stall[] | null;
-};
 
 export default function Lot3D(props: Props) {
   const [mounted, setMounted] = useState(false);
@@ -115,9 +160,11 @@ export default function Lot3D(props: Props) {
   if (!mounted) {
     return <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#9aa6b2', fontSize: 13 }}>loading 3D…</div>;
   }
+  const span = 26;
   return (
-    <Canvas shadows dpr={[1, 2]} camera={{ position: [0, SPAN * 0.85, SPAN], fov: 42 }} style={{ width: '100%', height: '100%', display: 'block' }}>
-      <color attach="background" args={['#eef3f1']} />
+    <Canvas shadows dpr={[1, 2]} camera={{ position: [0, span * 0.7, span], fov: 40 }} style={{ width: '100%', height: '100%', display: 'block' }}>
+      <color attach="background" args={['#eaf2ee']} />
+      <fog attach="fog" args={['#eaf2ee', span * 1.4, span * 3]} />
       <Scene {...props} />
     </Canvas>
   );
