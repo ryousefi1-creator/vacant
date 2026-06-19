@@ -37,6 +37,15 @@ NYC = 'https://webcams.nyctmc.org/api/cameras/{}/image'
 PEAKS_FILE = 'work/peaks.json'  # most cars ever counted per lot — grounds capacity in real data
 
 
+_LAYOUTS = None
+def learned_layout(lot_id):
+    """The renderer-only learned top-down layout for a lot, if one exists (loaded once)."""
+    global _LAYOUTS
+    if _LAYOUTS is None:
+        _LAYOUTS = spatial.load_layouts('calib')
+    return _LAYOUTS.get(lot_id)
+
+
 def load_peaks():
     try:
         return json.load(open(PEAKS_FILE))
@@ -197,6 +206,7 @@ def do_lot(model, calib, api, conf, imgsz, device, peaks, overlap=0.30, tile_img
         'map': calib['map_size'], 'cars': cars, 'inside': inside, 'count': int(len(xy)),
         'partial': partial_n, 'capacity': capacity, 'peak': peak, 'refresh_sec': calib['refresh_sec'],
         'cv_count': cv_inside, 'audit': audit_out, 'image': to_data_uri(viz),
+        'layout': learned_layout(calib['id']),   # learned top-down shape for the 1:1 renderer (gravel lots)
     })
     return inside, int(len(xy))
 

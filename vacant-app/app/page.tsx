@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import LotMap from './LotMap';
 import Lot3D from './Lot3D';
+import { synthLayout, type LearnedLayout } from './layoutGeom';
 
 type Car = { x: number; y: number };
 type Stall = { poly: [number, number][]; taken: boolean };
@@ -11,6 +12,7 @@ type Occ = {
   stalls: Stall[] | null;
   capacity: number | null; peak: number | null; refresh_sec: number | null; image: string | null;
   cv_count?: number | null; audit?: { claude: number; agree: boolean; t: number } | null;
+  layout?: LearnedLayout | null;
 };
 
 function cadence(refresh: number | null): string {
@@ -51,8 +53,10 @@ export default function Home() {
 
   const isLot = cur?.type === 'lot';
   const stallList = isLot && Array.isArray(cur?.stalls) && cur!.stalls!.length ? cur!.stalls! : null;
+  // gravel lot with a learned layout: its real stall count is a firmer capacity than the peak estimate
+  const learnedGeom = isLot && !stallList && cur?.layout ? synthLayout(cur.layout) : null;
   const carsHere = stallList ? stallList.filter((s) => s.taken).length : isLot ? (cur?.inside ?? 0) : (cur?.count ?? 0);
-  const cap = stallList ? stallList.length : (cur?.capacity ?? null);
+  const cap = stallList ? stallList.length : learnedGeom ? learnedGeom.stalls.length : (cur?.capacity ?? null);
   const open = cap != null ? Math.max(0, cap - carsHere) : null;
   const pct = cap ? Math.min(100, Math.round((carsHere / cap) * 100)) : 0;
   const estCap = isLot && !stallList && cur?.surface === 'gravel'; // gravel = estimate; real marked stalls = exact
@@ -128,8 +132,8 @@ export default function Home() {
           )}
           {isLot
             ? (view3d
-                ? <Lot3D map={cur?.map ?? null} cars={cur?.cars ?? null} surface={cur?.surface ?? null} capacity={cur?.capacity ?? null} stalls={cur?.stalls ?? null} />
-                : <LotMap map={cur?.map ?? null} cars={cur?.cars ?? null} surface={cur?.surface ?? null} capacity={cur?.capacity ?? null} stalls={cur?.stalls ?? null} />)
+                ? <Lot3D map={cur?.map ?? null} cars={cur?.cars ?? null} surface={cur?.surface ?? null} capacity={cur?.capacity ?? null} stalls={cur?.stalls ?? null} layout={cur?.layout ?? null} />
+                : <LotMap map={cur?.map ?? null} cars={cur?.cars ?? null} surface={cur?.surface ?? null} capacity={cur?.capacity ?? null} stalls={cur?.stalls ?? null} layout={cur?.layout ?? null} />)
             : (
               <div style={{ width: '100%', maxWidth: 760 }}>
                 <div style={{ borderRadius: 16, overflow: 'hidden', border: '1px solid #e7ecf0', background: '#0d1b2a', aspectRatio: '16/9', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -149,7 +153,7 @@ export default function Home() {
                 Spaces open{estCap ? ' (est.)' : ''}
               </div>
               <div style={{ fontSize: 66, fontWeight: 800, lineHeight: .95, color: '#10b981', letterSpacing: '-2px', marginTop: 6 }}>
-                {open ?? '—'}<span style={{ fontSize: 20, color: '#6b7a8d', fontWeight: 600 }}> {estCap ? '≈' : '/'} {cap}</span>
+                {open ?? '—'}<span style={{ fontSize: 20, color: '#6b7a8d', fontWeight: 600 }}> / {cap}</span>
               </div>
               <div style={{ height: 10, borderRadius: 8, background: '#eef2f5', overflow: 'hidden', margin: '16px 0 6px' }}>
                 <div style={{ height: '100%', width: `${pct}%`, borderRadius: 8, background: 'linear-gradient(90deg,#10b981,#fbbf24 70%,#ef4444)', transition: 'width .6s ease' }} />

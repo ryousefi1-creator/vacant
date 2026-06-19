@@ -18,6 +18,7 @@ type Occ = {
   stalls: Stall[] | null;
   capacity: number | null; peak: number | null; refresh_sec: number | null; image: string | null;
   cv_count?: number | null; audit?: { claude: number; agree: boolean; t: number } | null;
+  layout?: Record<string, unknown> | null;
 };
 
 const url = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
@@ -71,6 +72,7 @@ export async function POST(request: Request) {
       ? { claude: Number(b.audit.claude) || 0, agree: !!b.audit.agree, t: Number(b.audit.t) || 0 }
       : null,
     image: typeof b.image === 'string' ? b.image : null,
+    layout: b.layout && typeof b.layout === 'object' ? b.layout : null,
   });
   return Response.json({ ok: true });
 }

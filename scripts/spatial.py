@@ -167,7 +167,18 @@ def load_calibs(calib_dir='calib'):
     out = {}
     for p in sorted(glob.glob(os.path.join(calib_dir, '*.json'))):
         c = json.load(open(p))
+        if 'id' not in c:  # skip non-calib artifacts living in calib/ (e.g. *_layout_learned.json, renderer-only)
+            continue
         out[c['id']] = c
+    return out
+
+
+def load_layouts(calib_dir='calib'):
+    """Renderer-only LEARNED layouts (scripts/layout_learn.py): calib/<id>_layout_learned.json -> {id: spec}."""
+    out = {}
+    suffix = '_layout_learned.json'
+    for p in sorted(glob.glob(os.path.join(calib_dir, '*' + suffix))):
+        out[os.path.basename(p)[:-len(suffix)]] = json.load(open(p))
     return out
 
 
