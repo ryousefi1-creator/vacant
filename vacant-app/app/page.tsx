@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
 import LotMap from './LotMap';
+import Lot3D from './Lot3D';
 
 type Car = { x: number; y: number };
 type Stall = { poly: [number, number][]; taken: boolean };
@@ -22,6 +23,7 @@ export default function Home() {
   const [data, setData] = useState<Record<string, Occ>>({});
   const [active, setActive] = useState<string | null>(null);
   const [now, setNow] = useState(0);
+  const [view3d, setView3d] = useState(true);
 
   useEffect(() => {
     let on = true;
@@ -109,8 +111,24 @@ export default function Home() {
             <span style={{ width: 8, height: 8, borderRadius: '50%', background: cur ? (isLot ? '#10b981' : '#3b82f6') : '#9aa6b2' }} />
             {cur ? cur.name : 'no location'} · {isLot ? `${cur?.surface ?? ''} lot` : 'street'}
           </div>
+          {isLot && (
+            <div style={{ position: 'absolute', top: 12, right: 24, zIndex: 6, display: 'flex', gap: 4, background: '#fff', borderRadius: 10, padding: 3, boxShadow: '0 2px 8px rgba(13,27,42,.10)' }}>
+              {(['3d', 'iso'] as const).map((v) => {
+                const on = view3d === (v === '3d');
+                return (
+                  <button key={v} onClick={() => setView3d(v === '3d')} style={{
+                    cursor: 'pointer', border: 'none', borderRadius: 8, padding: '5px 12px', fontSize: 12, fontWeight: 700,
+                    background: on ? 'linear-gradient(160deg,#10b981,#059669)' : 'transparent', color: on ? '#fff' : '#6b7a8d' }}>
+                    {v === '3d' ? '3D' : '2D'}
+                  </button>
+                );
+              })}
+            </div>
+          )}
           {isLot
-            ? <LotMap map={cur?.map ?? null} cars={cur?.cars ?? null} surface={cur?.surface ?? null} capacity={cur?.capacity ?? null} stalls={cur?.stalls ?? null} />
+            ? (view3d
+                ? <Lot3D map={cur?.map ?? null} cars={cur?.cars ?? null} surface={cur?.surface ?? null} capacity={cur?.capacity ?? null} stalls={cur?.stalls ?? null} />
+                : <LotMap map={cur?.map ?? null} cars={cur?.cars ?? null} surface={cur?.surface ?? null} capacity={cur?.capacity ?? null} stalls={cur?.stalls ?? null} />)
             : (
               <div style={{ width: '100%', maxWidth: 760 }}>
                 <div style={{ borderRadius: 16, overflow: 'hidden', border: '1px solid #e7ecf0', background: '#0d1b2a', aspectRatio: '16/9', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
