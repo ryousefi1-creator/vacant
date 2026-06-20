@@ -45,7 +45,7 @@ PEAKS_FILE = 'work/peaks.json'  # most cars ever counted per lot — grounds cap
 
 _captures: dict = {}   # url -> cv2.VideoCapture, kept open across polls for live streams
 _stall_obs: dict = {}  # lot_id -> list of (N,4) box arrays, accumulated until we have enough to derive stalls
-AUTO_STALL_FRAMES = 8  # frames of detections needed before auto-deriving stall layout
+AUTO_STALL_FRAMES = 6  # frames of detections needed before auto-deriving stall layout
 
 
 def load_peaks():
@@ -91,14 +91,32 @@ def fetch(url):
 
 
 def detect_lot(model, frame, calib, conf, lot_imgsz, tile_imgsz, tile_grid, device):
-    """Detect vehicles for a LOT. Tiling is opt-in per calib ("tile": true) to recover
-    small/far cars on wide gravel lots; close lots stay single-pass (tiling splits big
-    foreground cars). Per-calib "imgsz"/"tile_imgsz"/"tile_grid" override the CLI defaults."""
+    """Detect vehicles for a LOT.
+
+    Per-calib overrides (all optional):
+      "imgsz"         int   inference resolution (default: lot_imgsz CLI arg)
+      "iou"           float YOLO NMS IoU threshold; lower = keep more adjacent boxes
+                            (0.3 for close carport cars, 0.7 default merges them)
+      "clahe"         bool  CLAHE contrast enhancement before inference; helps in
+                            shadowed carport/garage conditions
+      "detect_topdown" bool warp the lot region to bird's-eye before running YOLO
+                            (fixes perspective compression; requires a calibrated lot_quad)
+      "tile"          bool  SAHI tile grid for wide lots with small far cars
+    """
+    iou_thr = float(calib.get('iou', 0.45))
+    imgsz_c = int(calib.get('imgsz', lot_imgsz))
+
+    if calib.get('clahe'):
+        frame = spatial.clahe_enhance(frame)
+
+    if calib.get('detect_topdown') and calib.get('lot_quad') and calib.get('map_size'):
+        return spatial.detect_topdown(model, frame, calib, conf, imgsz_c, device, iou_thr)
+
     if calib.get('tile'):
         return spatial.detect_tiled(model, frame, conf, int(calib.get('tile_imgsz', tile_imgsz)),
                                     device, grid=int(calib.get('tile_grid', tile_grid)),
-                                    full_imgsz=int(calib.get('imgsz', lot_imgsz)))
-    return spatial.detect(model, frame, conf, int(calib.get('imgsz', lot_imgsz)), device)
+                                    full_imgsz=imgsz_c, iou_thr=iou_thr)
+    return spatial.detect(model, frame, conf, imgsz_c, device, iou_thr)
 
 
 def to_data_uri(viz, width=800):
@@ -310,11 +328,13 @@ def main():
                         print(f"  [auto-stall] {cid}: {frames_so_far}/{AUTO_STALL_FRAMES} frames collected", flush=True)
                         if frames_so_far >= AUTO_STALL_FRAMES:
                             all_boxes = np.vstack(obs)
+                            fw = c['frame'][0] if 'frame' in c else None
+                            fh = c['frame'][1] if 'frame' in c else None
                             stalls = spatial.auto_stalls(
                                 all_boxes,
                                 extend_ends=1,
-                                iou_thr=0.15,
                                 capacity=c.get('capacity', 0),
+                                frame_wh=(fw, fh) if fw and fh else None,
                             )
                             if stalls:
                                 # derive tight lot quad from stall extents

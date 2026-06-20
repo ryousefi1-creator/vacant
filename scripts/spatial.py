@@ -33,19 +33,38 @@ def project(H, pts):
     return cv2.perspectiveTransform(a, H).reshape(-1, 2)
 
 
-def detect(model, frame, conf, imgsz, device):
-    """Single-pass vehicle detection -> xyxy boxes (Nx4, image space)."""
-    r = model.predict(frame, classes=VEHICLE, conf=conf, imgsz=imgsz, verbose=False, device=device)[0]
+def clahe_enhance(frame):
+    """CLAHE on the L channel: lifts detail in shadowed carport/garage areas
+    without blowing out highlights. Use when cars are partially under a canopy."""
+    lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+    l = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8)).apply(l)
+    return cv2.cvtColor(cv2.merge([l, a, b]), cv2.COLOR_LAB2BGR)
+
+
+def detect(model, frame, conf, imgsz, device, iou_thr=0.45):
+    """Single-pass vehicle detection -> xyxy boxes (Nx4, image space).
+    iou_thr: YOLO internal NMS threshold — lower = keep more adjacent boxes
+    (0.3–0.4 for close carport cars; 0.7 default keeps merged boxes)."""
+    r = model.predict(frame, classes=VEHICLE, conf=conf, imgsz=imgsz,
+                      verbose=False, device=device, iou=iou_thr)[0]
     return r.boxes.xyxy.cpu().numpy() if r.boxes is not None and len(r.boxes) else np.empty((0, 4), np.float32)
 
 
 def _nms(boxes, scores, iou_thr=0.5, contain_thr=0.7):
-    """Greedy NMS (numpy, no torch dep). Suppresses a box if it overlaps a kept (higher-score)
-    box by IoU >= iou_thr OR is >= contain_thr CONTAINED inside it (intersection / smaller-box
-    area). The containment test is what collapses tile SHARDS of one big car: a half-car sliver
-    sits ~fully inside the whole-car box even though their IoU is low, so plain IoU-NMS would
-    keep both and over-count. Distinct adjacent cars rarely sit >70% inside each other, so they
-    survive."""
+    """Greedy NMS with containment suppression for tile-shard collapse.
+
+    A box is suppressed if it overlaps a KEPT (higher-confidence) box by
+    IoU >= iou_thr  OR  is >= contain_thr contained inside it.
+
+    The containment test collapses tile SHARDS of ONE car (a half-car sliver
+    sitting fully inside the whole-car box).  BUT: a merged detection that
+    spans 3 adjacent cars is 3× larger than each individual car — we must NOT
+    let that merged box suppress the individual detections.  Guard: containment
+    suppression only fires when the kept box is at most 2.2× the candidate's
+    area.  Tile shards are roughly the same size as the car (ratio ≈ 0.5–1.5),
+    so they're still collapsed.  A 3-car merged box (ratio ≈ 3) is left alone,
+    keeping the individual car boxes alive."""
     if len(boxes) == 0:
         return []
     x1, y1, x2, y2 = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
@@ -61,17 +80,19 @@ def _nms(boxes, scores, iou_thr=0.5, contain_thr=0.7):
         inter = np.maximum(0.0, xx2 - xx1) * np.maximum(0.0, yy2 - yy1)
         iou = inter / (areas[i] + areas[rest] - inter + 1e-9)
         contain = inter / (np.minimum(areas[i], areas[rest]) + 1e-9)
-        order = rest[(iou <= iou_thr) & (contain <= contain_thr)]
+        # Only apply containment suppression when the kept box isn't much bigger
+        # (prevents a wide merged 3-car box from swallowing individual car boxes)
+        area_ratio = areas[i] / (areas[rest] + 1e-9)
+        suppress_contain = (contain >= contain_thr) & (area_ratio <= 2.2)
+        order = rest[(iou <= iou_thr) & ~suppress_contain]
     return keep
 
 
-def detect_tiled(model, frame, conf, imgsz, device, grid=3, tile_ov=0.2, full_imgsz=1920):
-    """SAHI-style detection. A FULL-FRAME pass (whole near/big cars as single boxes) pooled
-    with an overlapping GRID of tiles (small/far cars become big enough to detect at `imgsz`),
-    then greedy NMS with containment so tile shards of a big car collapse back into its
-    whole-frame box. The full-frame pass is the fix for a near car LARGER than one tile being
-    sliced across seams and counted several times — the whole-car box from the full pass
-    swallows the shards. For FAR/wide cams; close cams can skip tiling entirely."""
+def detect_tiled(model, frame, conf, imgsz, device, grid=3, tile_ov=0.2,
+                 full_imgsz=1920, iou_thr=0.45):
+    """SAHI-style detection. Full-frame pass (large near cars) + overlapping tile grid
+    (small far cars), merged with containment NMS.  iou_thr is passed to both the
+    YOLO internal NMS and the post-tile NMS so close cars aren't merged."""
     fh, fw = frame.shape[:2]
     boxes, scores = [], []
 
@@ -82,20 +103,59 @@ def detect_tiled(model, frame, conf, imgsz, device, grid=3, tile_ov=0.2, full_im
             boxes.append([bx[0] + ox, bx[1] + oy, bx[2] + ox, bx[3] + oy])
             scores.append(float(sc))
 
-    # full-frame pass: whole big/near cars (one box each, even if larger than a tile)
-    collect(model.predict(frame, classes=VEHICLE, conf=conf, imgsz=full_imgsz, verbose=False, device=device)[0])
-    # tiles: recover small/far cars the full pass misses
+    collect(model.predict(frame, classes=VEHICLE, conf=conf, imgsz=full_imgsz,
+                          verbose=False, device=device, iou=iou_thr)[0])
     tw, th = fw / grid, fh / grid
     px, py = tw * tile_ov, th * tile_ov
     for r in range(grid):
         for c in range(grid):
             x0, y0 = max(0, int(c * tw - px)), max(0, int(r * th - py))
             x1, y1 = min(fw, int((c + 1) * tw + px)), min(fh, int((r + 1) * th + py))
-            collect(model.predict(frame[y0:y1, x0:x1], classes=VEHICLE, conf=conf, imgsz=imgsz, verbose=False, device=device)[0], x0, y0)
+            collect(model.predict(frame[y0:y1, x0:x1], classes=VEHICLE, conf=conf,
+                                  imgsz=imgsz, verbose=False, device=device, iou=iou_thr)[0], x0, y0)
     if not boxes:
         return np.empty((0, 4), np.float32)
     boxes = np.array(boxes, np.float32)
     return boxes[_nms(boxes, np.array(scores, np.float32))]
+
+
+def detect_topdown(model, frame, calib, conf, imgsz, device, iou_thr=0.35):
+    """Bird's-eye detection: warp the lot region to a flat top-down view,
+    run YOLO on the undistorted image, back-project boxes to the original frame.
+
+    Fixes two problems at once:
+    1. Perspective compression — far cars are the same pixel size as near cars
+       in the warped view, so YOLO sees uniform-looking cars throughout.
+    2. Adjacent-car separation — cars side by side under a canopy look evenly
+       spaced from above, reducing bounding-box overlap and NMS merging.
+
+    Requires a reasonably tight lot_quad (not the full frame). The auto-stall
+    learner in push.py refines lot_quad after the first successful stall derive,
+    at which point this mode becomes effective."""
+    mw, mh = calib['map_size']
+    H = homography(calib['lot_quad'], mw, mh)
+
+    # Scale up so YOLO gets at least imgsz on the longer edge
+    scale = max(imgsz / max(mw, mh), 1.0)
+    W_out, H_out = int(round(mw * scale)), int(round(mh * scale))
+    S = np.array([[scale, 0, 0], [0, scale, 0], [0, 0, 1]], np.float64)
+    H_final = (S @ H).astype(np.float32)
+
+    top = cv2.warpPerspective(frame, H_final, (W_out, H_out))
+    r = model.predict(top, classes=VEHICLE, conf=conf, imgsz=imgsz,
+                      verbose=False, device=device, iou=iou_thr)[0]
+    if r.boxes is None or not len(r.boxes):
+        return np.empty((0, 4), np.float32)
+
+    td_boxes = r.boxes.xyxy.cpu().numpy()
+    H_inv = np.linalg.inv(H_final)
+    orig_boxes = []
+    for bx1, by1, bx2, by2 in td_boxes:
+        corners = np.array([[bx1,by1],[bx2,by1],[bx2,by2],[bx1,by2]], np.float32)
+        orig = project(H_inv, corners)
+        orig_boxes.append([float(orig[:,0].min()), float(orig[:,1].min()),
+                           float(orig[:,0].max()), float(orig[:,1].max())])
+    return np.array(orig_boxes, np.float32)
 
 
 # --- LOT REGION PARAMETERS (how a detected car is assigned to THIS lot) ----------
@@ -227,24 +287,35 @@ def display_stalls(calib, states):
 # Used by push.py to auto-derive stalls from the live stream without any
 # separate calibration step.
 
-def _asl_iou(a, b):
-    xi1, yi1 = max(a[0], b[0]), max(a[1], b[1])
-    xi2, yi2 = min(a[2], b[2]), min(a[3], b[3])
-    inter = max(0, xi2 - xi1) * max(0, yi2 - yi1)
-    ua = (a[2]-a[0])*(a[3]-a[1]) + (b[2]-b[0])*(b[3]-b[1]) - inter
-    return inter / ua if ua > 0 else 0.0
+def _asl_cluster(all_boxes, min_votes=1):
+    """Cluster raw boxes from N frames into stable car positions using
+    CENTER-POINT distance (in units of median box width).
 
-
-def _asl_cluster(all_boxes, iou_thr=0.15, min_votes=1):
-    """Cluster raw boxes from N frames into stable car positions."""
+    Why not IoU: adjacent cars' bounding boxes may barely touch (IoU ≈ 0.05)
+    or be completely non-overlapping, so IoU-based clustering merges nothing
+    and returns one cluster per frame-detection — producing one stall per
+    observed box, which is correct only if every observation is a different car.
+    But observations of the SAME car across frames have near-identical centers,
+    while TWO DIFFERENT adjacent cars have centers roughly one car-width apart.
+    Distance-in-car-widths cleanly separates the two cases regardless of whether
+    their boxes overlap.
+    """
     if len(all_boxes) == 0:
         return []
+    all_boxes = np.array(all_boxes, np.float32)
+    # Use median box width as the natural distance unit
+    med_w = float(np.median(all_boxes[:, 2] - all_boxes[:, 0]))
+    dist_thr = med_w * 0.45  # same physical car if centers within 45% of a car width
+
     clusters: list[list] = []
     for box in all_boxes:
+        cx, cy = (box[0]+box[2])/2, (box[1]+box[3])/2
         merged = False
         for cl in clusters:
-            rep = np.mean(cl, axis=0)
-            if _asl_iou(box, rep) >= iou_thr:
+            arr = np.array(cl)
+            cl_cx = float(np.mean((arr[:,0]+arr[:,2])/2))
+            cl_cy = float(np.mean((arr[:,1]+arr[:,3])/2))
+            if np.hypot(cx - cl_cx, cy - cl_cy) <= dist_thr:
                 cl.append(box.tolist())
                 merged = True
                 break
@@ -320,14 +391,15 @@ def _asl_box_to_stall(box, pad_x=0.06, pad_y=0.04):
                      [int(x2+pw), int(y2+ph)], [int(x1-pw), int(y2+ph)]]}
 
 
-def auto_stalls(all_boxes, extend_ends=1, iou_thr=0.15, capacity=0, row_y_tol=0.55):
+def auto_stalls(all_boxes, extend_ends=1, capacity=0, row_y_tol=0.55, frame_wh=None):
     """Full pipeline: cluster box observations -> rows -> fill gaps -> extend ends.
 
-    all_boxes: (N, 4) array of YOLO xyxy boxes accumulated across multiple frames.
-    Returns list of {'poly': [[x,y]x4]} image-space stall dicts, or [] if
-    not enough data to form a layout.
+    all_boxes  : (N, 4) array of YOLO xyxy boxes accumulated across multiple frames.
+    frame_wh   : (width, height) of the source frame — stalls are clamped to this
+                 boundary so phantom stalls can't extend beyond the image edge.
+    Returns list of {'poly': [[x,y]x4]} image-space stall dicts, or [].
     """
-    avg = _asl_cluster(all_boxes, iou_thr=iou_thr, min_votes=1)
+    avg = _asl_cluster(all_boxes, min_votes=1)
     if not avg:
         return []
     rows = _asl_rows(avg, row_y_tol=row_y_tol)
@@ -336,9 +408,16 @@ def auto_stalls(all_boxes, extend_ends=1, iou_thr=0.15, capacity=0, row_y_tol=0.
         n = sum(len(r) for r in rows)
         per_row_cap = [round(capacity * len(r) / n) for r in rows]
         per_row_cap[0] += capacity - sum(per_row_cap)
+    fw = float(frame_wh[0]) if frame_wh else float('inf')
+    fh = float(frame_wh[1]) if frame_wh else float('inf')
     stalls = []
     for ri, row in enumerate(rows):
         cap_row = per_row_cap[ri] if per_row_cap else None
         for box in _asl_fill_row(row, target_n=cap_row, extend_ends=extend_ends):
+            # Discard phantom stalls that extend beyond the image boundary
+            if box[0] >= fw or box[1] >= fh or box[2] <= 0 or box[3] <= 0:
+                continue
+            # Clamp to frame bounds
+            box = [max(0, box[0]), max(0, box[1]), min(fw, box[2]), min(fh, box[3])]
             stalls.append(_asl_box_to_stall(box))
     return stalls
