@@ -47,6 +47,87 @@ _captures: dict = {}   # url -> cv2.VideoCapture, kept open across polls for liv
 _stall_obs: dict = {}  # lot_id -> list of (N,4) box arrays, accumulated until we have enough to derive stalls
 AUTO_STALL_FRAMES = 6  # frames of detections needed before auto-deriving stall layout
 
+# ── temporal hysteresis ────────────────────────────────────────────────────────
+# Each lot gets a StallDebouncer that prevents stalls from flickering open/taken
+# on a single frame where YOLO misses or hallucinates a car (glare, shadow pass,
+# brief occlusion).  A stall must be consistently occupied for OCCUPY_THRESH
+# frames before we call it taken; consistently empty for EMPTY_THRESH frames
+# before we call it open.  EMPTY_THRESH is intentionally higher because a parked
+# car rarely disappears — a miss is almost always a detection failure.
+OCCUPY_THRESH = 2   # frames of occupied before flipping to taken
+EMPTY_THRESH  = 4   # frames of empty before flipping to open
+
+class StallDebouncer:
+    """Per-lot temporal debouncer for stall occupancy states."""
+    def __init__(self):
+        self._stable: list[bool] = []
+        self._occ_count: list[int] = []  # consecutive occupied frames
+        self._emp_count: list[int] = []  # consecutive empty frames
+
+    def update(self, raw: list[bool]) -> list[bool]:
+        n = len(raw)
+        if len(self._stable) != n:
+            self._stable = list(raw)
+            self._occ_count = [0] * n
+            self._emp_count = [0] * n
+            return list(self._stable)
+        for i, r in enumerate(raw):
+            if r:
+                self._occ_count[i] += 1
+                self._emp_count[i] = 0
+                if self._occ_count[i] >= OCCUPY_THRESH:
+                    self._stable[i] = True
+            else:
+                self._emp_count[i] += 1
+                self._occ_count[i] = 0
+                if self._emp_count[i] >= EMPTY_THRESH:
+                    self._stable[i] = False
+        return list(self._stable)
+
+_debouncers: dict = {}  # lot_id -> StallDebouncer
+
+# ── stall boundary auto-refinement ────────────────────────────────────────────
+# After REFINE_FRAMES frames of stable detections, nudge stall x-centers toward
+# where cars actually park (exponential moving average).  Corrects for small
+# calibration drift without requiring a full re-run of stall_vision.py.
+REFINE_FRAMES = 20    # frames before first refinement
+REFINE_ALPHA  = 0.15  # EMA learning rate (lower = slower, smoother adaptation)
+_refine_obs: dict = {}  # lot_id -> list of car cx values seen
+
+def _refine_stalls(calib: dict, xy) -> dict:
+    """Nudge stall x-centers toward observed car centers (EMA).  Only adjusts
+    stalls that have a clear match (one car clearly closest to the stall).
+    Returns updated calib dict (in-place) and saves to disk."""
+    if not xy or not calib.get('stalls'):
+        return calib
+    stalls = calib['stalls']
+    # stall x-centers
+    s_cx = [(s['poly'][0][0] + s['poly'][1][0]) / 2.0 for s in stalls]
+    # car x-centers
+    car_cx = [(b[0] + b[2]) / 2.0 for b in xy]
+    # assign each car to nearest stall (by x distance)
+    moved = False
+    for car_x in car_cx:
+        dists = [abs(car_x - sc) for sc in s_cx]
+        best = int(np.argmin(dists))
+        if dists[best] > 120:   # too far — don't assign
+            continue
+        old_cx = s_cx[best]
+        new_cx = old_cx * (1 - REFINE_ALPHA) + car_x * REFINE_ALPHA
+        delta = new_cx - old_cx
+        if abs(delta) < 0.5:
+            continue
+        # shift the stall polygon horizontally by delta
+        poly = stalls[best]['poly']
+        stalls[best]['poly'] = [[round(pt[0] + delta), pt[1]] for pt in poly]
+        s_cx[best] = new_cx
+        moved = True
+    if moved:
+        calib['stalls'] = stalls
+    return calib
+
+_refine_counts: dict = {}  # lot_id -> frame counter
+
 
 def load_peaks():
     try:
@@ -185,8 +266,21 @@ def do_lot(model, calib, api, conf, imgsz, device, peaks, overlap=0.30, tile_img
     # the marked-stall count, open = # empty). The estimate/peak path below is only
     # for free-form gravel lots that have no countable spaces.
     if calib.get('stalls'):
-        states = spatial.stall_states(calib['stalls'], xy, overlap)
-        stalls_out = spatial.display_stalls(calib, states)   # CLEAN calibrated layout + live occupancy
+        cid = calib['id']
+
+        # ── stall boundary auto-refinement (background, every REFINE_FRAMES) ──
+        cnt = _refine_counts.get(cid, 0) + 1
+        _refine_counts[cid] = cnt
+        if cnt % REFINE_FRAMES == 0 and len(xy):
+            calib = _refine_stalls(calib, xy)
+
+        raw_states = spatial.stall_states(calib['stalls'], xy, overlap)
+
+        # ── temporal hysteresis ───────────────────────────────────────────────
+        deb = _debouncers.setdefault(cid, StallDebouncer())
+        states = deb.update(raw_states)
+
+        stalls_out = spatial.display_stalls(calib, states)
         taken = sum(states)
         open_n = len(states) - taken
         viz = annotate_stalls(frame, calib, xy, states)

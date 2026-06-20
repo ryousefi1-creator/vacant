@@ -239,16 +239,62 @@ def load_calibs(calib_dir='calib'):
 # place so the worker (push.py) and the demo (demo_paved.py) can't drift.
 
 def stall_states(stalls, xy, overlap=0.30):
-    """stalls = [{'poly': [[x,y]x4 image coords]}]; xy = car boxes (image space).
-    Returns a list of bools (True = taken) aligned to `stalls`."""
-    quads = [np.array([[x1, y1], [x2, y1], [x2, y2], [x1, y2]], np.float32) for x1, y1, x2, y2 in xy]
-    out = []
-    for s in stalls:
-        poly = np.array(s['poly'], np.float32)
-        area = max(cv2.contourArea(poly), 1.0)
-        best = max((cv2.intersectConvexConvex(poly, cq)[0] for cq in quads), default=0.0)
-        out.append(bool(best / area >= overlap))
-    return out
+    """Determine which stalls are occupied.
+
+    Two-signal cascade so every car is assigned to exactly one stall:
+
+    1. GROUND CONTACT — the lower-80% point of the bounding box (close to
+       where the wheels touch the ground) is tested against each stall polygon
+       via point-in-poly.  This is unambiguous: if the contact is inside the
+       stall, it's taken.  We try the lower 80%, then the centroid as a
+       fallback for unusual camera angles.
+
+    2. EXCLUSIVE OVERLAP — for any car whose contact point isn't inside any
+       stall (e.g. car right at the stall boundary), we assign it to the one
+       stall it overlaps the most — never split the same car across two
+       adjacent stalls.  The overlap fraction must still exceed `overlap`.
+
+    This replaces the old "every stall independently checks all cars" loop,
+    which could mark two adjacent stalls taken by the same car.
+    """
+    if not xy or not stalls:
+        return [False] * len(stalls)
+
+    polys = [np.array(s['poly'], np.float32) for s in stalls]
+    taken = [False] * len(stalls)
+
+    unmatched = []  # cars whose contact point didn't land in any stall
+    for x1, y1, x2, y2 in xy:
+        cx = (x1 + x2) / 2.0
+        # lower-80% point: closer to wheels than bbox center
+        contact_y = y1 + (y2 - y1) * 0.80
+        found = False
+        for probe in ((cx, contact_y), (cx, (y1 + y2) / 2.0)):
+            pt = (float(probe[0]), float(probe[1]))
+            for si, poly in enumerate(polys):
+                if cv2.pointPolygonTest(poly, pt, False) >= 0:
+                    taken[si] = True
+                    found = True
+                    break
+            if found:
+                break
+        if not found:
+            unmatched.append((x1, y1, x2, y2))
+
+    # Exclusive-overlap fallback for unmatched cars
+    for x1, y1, x2, y2 in unmatched:
+        quad = np.array([[x1, y1], [x2, y1], [x2, y2], [x1, y2]], np.float32)
+        best_si, best_frac = -1, 0.0
+        for si, poly in enumerate(polys):
+            inter = cv2.intersectConvexConvex(poly, quad)[0]
+            if inter > 0:
+                frac = inter / max(cv2.contourArea(poly), 1.0)
+                if frac > best_frac:
+                    best_frac, best_si = frac, si
+        if best_si >= 0 and best_frac >= overlap:
+            taken[best_si] = True
+
+    return taken
 
 
 def project_stalls(calib, states):
