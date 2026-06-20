@@ -167,6 +167,8 @@ def load_calibs(calib_dir='calib'):
     out = {}
     for p in sorted(glob.glob(os.path.join(calib_dir, '*.json'))):
         c = json.load(open(p))
+        if 'id' not in c:
+            continue
         out[c['id']] = c
     return out
 

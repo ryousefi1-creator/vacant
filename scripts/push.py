@@ -21,8 +21,15 @@ import argparse
 import base64
 import json
 import os
+import ssl
 import time
 import urllib.request
+
+# Bypass SSL certificate verification for public camera feeds on macOS
+try:
+    ssl._create_default_https_context = ssl._create_unverified_context
+except AttributeError:
+    pass
 
 import cv2
 import numpy as np
