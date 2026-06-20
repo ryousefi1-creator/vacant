@@ -131,16 +131,19 @@ def extract_markings(frame: np.ndarray) -> np.ndarray:
 # ─── line detection ───────────────────────────────────────────────────────────
 
 def hough_lines(mask: np.ndarray,
-                min_votes: int = 35,
+                min_votes: int = 120,
                 rho_res: float = 1.0,
-                theta_res_deg: float = 0.5) -> list:
+                theta_res_deg: float = 0.5,
+                max_lines: int = 40) -> list:
     """Standard (accumulator-based) Hough lines on the marking mask.
-    Returns [(rho, theta), ...] — theta in radians [0, pi)."""
+    Returns at most max_lines (rho, theta) pairs sorted by accumulator strength.
+    Higher min_votes = only long/strong lines survive."""
     edges = cv2.Canny(mask, 30, 120, apertureSize=3)
     lines = cv2.HoughLines(edges, rho_res, np.deg2rad(theta_res_deg), min_votes)
     if lines is None:
         return []
-    return [(float(l[0][0]), float(l[0][1])) for l in lines]
+    # HoughLines returns sorted by vote count descending; cap to avoid noise flood
+    return [(float(l[0][0]), float(l[0][1])) for l in lines[:max_lines]]
 
 
 # ─── multi-frame line accumulator ─────────────────────────────────────────────
@@ -148,52 +151,57 @@ def hough_lines(mask: np.ndarray,
 class LineAccumulator:
     """Accumulates Hough line detections across multiple frames.
 
+    Tracks how many *distinct frames* each line appears in (not raw vote count),
+    so confidence stays in [0, 1] regardless of how many lines per frame.
+
     A line seen in many frames → real divider.
     A line seen in only one or two frames → noise/glare/shadow.
-
-    confidence() = average (votes / n_frames) across the top confirmed lines.
     """
 
     def __init__(self, rho_tol: float = 18.0, theta_tol_deg: float = 4.0):
         self.rho_tol = rho_tol
         self.theta_tol = np.deg2rad(theta_tol_deg)
-        self.lines: list[dict] = []  # {rho, theta, votes}
+        # Each entry: {rho, theta, frames_seen, rho_sum, theta_sum}
+        self.lines: list[dict] = []
         self.n_frames: int = 0
 
     def add_frame(self, frame_lines: list):
         self.n_frames += 1
+        matched_indices = set()
         for rho, theta in frame_lines:
-            matched = False
-            for line in self.lines:
+            for idx, line in enumerate(self.lines):
+                if idx in matched_indices:
+                    continue
                 drho = abs(rho - line['rho'])
-                # theta is periodic: 0° and 180° are the same direction
                 dtheta = abs(theta - line['theta'])
                 dtheta = min(dtheta, abs(np.pi - dtheta))
                 if drho <= self.rho_tol and dtheta <= self.theta_tol:
-                    n = line['votes']
+                    # Update running average position
+                    n = line['frames_seen']
                     line['rho'] = (line['rho'] * n + rho) / (n + 1)
                     line['theta'] = (line['theta'] * n + theta) / (n + 1)
-                    line['votes'] += 1
-                    matched = True
+                    line['frames_seen'] += 1
+                    matched_indices.add(idx)
                     break
-            if not matched:
-                self.lines.append({'rho': rho, 'theta': theta, 'votes': 1})
+            else:
+                self.lines.append({'rho': rho, 'theta': theta, 'frames_seen': 1})
 
     def confident_lines(self, min_frac: float = 0.45) -> list:
         if self.n_frames == 0:
             return []
         thresh = max(1, self.n_frames * min_frac)
-        return [(l['rho'], l['theta'], l['votes'])
-                for l in self.lines if l['votes'] >= thresh]
+        return [(l['rho'], l['theta'], l['frames_seen'])
+                for l in self.lines if l['frames_seen'] >= thresh]
 
     def confidence(self, min_frac: float = 0.45) -> float:
         conf = self.confident_lines(min_frac)
         if not conf or self.n_frames == 0:
             return 0.0
-        avg_vote_frac = float(np.mean([v / self.n_frames for _, _, v in conf]))
-        # Also weight by number of confident lines (more = higher confidence)
+        # frames_seen / n_frames is already in [0, 1]
+        avg_frame_frac = float(np.mean([fs / self.n_frames for _, _, fs in conf]))
+        # Also weight by number of stable lines (need at least a few to be meaningful)
         count_score = min(1.0, len(conf) / 4)
-        return float(avg_vote_frac * 0.7 + count_score * 0.3)
+        return float(avg_frame_frac * 0.7 + count_score * 0.3)
 
 
 # ─── line geometry ────────────────────────────────────────────────────────────
@@ -450,8 +458,8 @@ def main():
                     help='seconds between frames (give lot markings time to vary across frames)')
     ap.add_argument('--min-votes-frac', type=float, default=0.40,
                     help='fraction of frames a line must appear in to count as real')
-    ap.add_argument('--min-line-votes', type=int, default=30,
-                    help='Hough accumulator votes per frame (lower = detect fainter lines)')
+    ap.add_argument('--min-line-votes', type=int, default=120,
+                    help='Hough accumulator votes per frame (lower = detect fainter lines, higher = only strong lines)')
     ap.add_argument('--max-pair-gap', type=float, default=40.0,
                     help='max px between two lines to be considered a double-line pair')
     ap.add_argument('--out-scale', type=float, default=2.5,
@@ -652,8 +660,10 @@ def main():
     # ── save preview ──────────────────────────────────────────────────────────
     if last_warped is not None and last_mask is not None:
         try:
+            cached = cv2.imread('work/' + args.id + '_calib_frame.jpg')
+            orig_for_preview = cached if cached is not None else grab_frame(url)
             save_preview(
-                cv2.imread('work/' + args.id + '_calib_frame.jpg') or grab_frame(url),
+                orig_for_preview,
                 last_warped, last_mask, conf_segs,
                 stalls_img, stalls_td, W_out, H_out,
                 f'work/{args.id}_stall_vision.jpg',
