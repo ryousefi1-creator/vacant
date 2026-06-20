@@ -293,7 +293,7 @@ def main():
                     g = c.get('tile_grid', args.tile_grid)
                     tag = f" [tiled {g}x{g}]" if c.get('tile') else ''
                     print(f"  [lot] {c['name']}:{tag} {inside} in-lot ({total} detected, peak {peaks.get(cid)})", flush=True)
-                    due[(kind, cid)] = time.time() + args.lot_interval
+                    due[(kind, cid)] = time.time() + c.get('refresh_sec', args.lot_interval)
                 else:
                     st = next(s for s in STREETS if s['id'] == cid)
                     n = do_street(model, st, args.api, args.conf, args.imgsz, args.device)
