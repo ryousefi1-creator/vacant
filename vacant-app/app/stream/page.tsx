@@ -48,9 +48,9 @@ export default function StreamPage() {
         hls.on(Hls.Events.ERROR, (_e: unknown, data: import('hls.js').ErrorData) => {
           if (data.fatal) setHlsState('offline');
         });
-      } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      } else if (video?.canPlayType('application/vnd.apple.mpegurl')) {
         video.src = HLS_URL;
-        video.addEventListener('loadedmetadata', () => { setHlsState('live'); video.play().catch(() => {}); });
+        video.addEventListener('loadedmetadata', () => { setHlsState('live'); video!.play().catch(() => {}); });
         video.addEventListener('error', () => setHlsState('offline'));
       }
     }

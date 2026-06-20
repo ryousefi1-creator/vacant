@@ -107,19 +107,26 @@ export default function Home() {
             </svg>
             <span>Vac<span style={{ color: '#10b981' }}>ant</span></span>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <span style={{ color: '#6b7a8d', fontSize: 12.5, fontWeight: 600 }}>
-              {lots.length} lot{lots.length !== 1 ? 's' : ''} · {streets.length} street{streets.length !== 1 ? 's' : ''} · {totalCars} vehicles live
+              {lots.length} lot{lots.length !== 1 ? 's' : ''} · {totalCars} vehicles live
             </span>
-            <Link href="/stream" target="_blank" style={{
-              display: 'flex', alignItems: 'center', gap: 6, padding: '6px 13px', borderRadius: 10,
-              background: 'linear-gradient(160deg,#10b981,#059669)', color: '#fff',
-              fontSize: 12.5, fontWeight: 700, textDecoration: 'none',
-              boxShadow: '0 4px 12px rgba(16,185,129,.3)',
-            }}>
-              <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#fff', opacity: .85 }} />
-              Live Stream
-            </Link>
+            {[
+              { href: '/manage', label: 'Lot Manager' },
+              { href: '/map',    label: 'Map' },
+              { href: '/stream', label: 'Live Stream', primary: true },
+            ].map(({ href, label, primary }) => (
+              <Link key={href} href={href} target="_blank" style={{
+                display: 'flex', alignItems: 'center', gap: 6, padding: '6px 13px', borderRadius: 10,
+                background: primary ? 'linear-gradient(160deg,#10b981,#059669)' : '#f0f4f6',
+                color: primary ? '#fff' : '#0d1b2a',
+                fontSize: 12.5, fontWeight: 700, textDecoration: 'none',
+                boxShadow: primary ? '0 4px 12px rgba(16,185,129,.3)' : 'none',
+              }}>
+                {primary && <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#fff', opacity: .85 }} />}
+                {label}
+              </Link>
+            ))}
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8, overflowX: 'auto', padding: '14px 0 12px', scrollbarWidth: 'thin', alignItems: 'center' }}>

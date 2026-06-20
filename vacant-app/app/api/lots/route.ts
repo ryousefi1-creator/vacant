@@ -71,6 +71,24 @@ export async function POST(request: Request) {
   }
 }
 
+export async function PATCH(request: Request) {
+  try {
+    const body = await request.json();
+    const { id, name, url, capacity } = body;
+    if (!id) return Response.json({ error: 'id required' }, { status: 400 });
+    const file = path.join(CALIB_DIR, `${id}.json`);
+    if (!fs.existsSync(file)) return Response.json({ error: 'not found' }, { status: 404 });
+    const calib = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (name !== undefined) calib.name = String(name).trim();
+    if (url  !== undefined) calib.url  = String(url).trim();
+    if (capacity !== undefined) calib.capacity = Number(capacity) || 0;
+    fs.writeFileSync(file, JSON.stringify(calib, null, 2));
+    return Response.json({ ok: true });
+  } catch (e) {
+    return Response.json({ error: String(e) }, { status: 500 });
+  }
+}
+
 export async function DELETE(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
