@@ -218,3 +218,127 @@ def display_stalls(calib, states):
     if not layout:
         return project_stalls(calib, states)
     return [{'poly': s['poly'], 'taken': bool(t)} for s, t in zip(layout, states)]
+
+
+# ─── auto-stall learning ──────────────────────────────────────────────────────
+# Given multiple frames of raw YOLO boxes, cluster into stable car positions,
+# group into parking rows, fill gaps (empty stalls between cars), and extend
+# each row at both ends so edge empty spots are included.
+# Used by push.py to auto-derive stalls from the live stream without any
+# separate calibration step.
+
+def _asl_iou(a, b):
+    xi1, yi1 = max(a[0], b[0]), max(a[1], b[1])
+    xi2, yi2 = min(a[2], b[2]), min(a[3], b[3])
+    inter = max(0, xi2 - xi1) * max(0, yi2 - yi1)
+    ua = (a[2]-a[0])*(a[3]-a[1]) + (b[2]-b[0])*(b[3]-b[1]) - inter
+    return inter / ua if ua > 0 else 0.0
+
+
+def _asl_cluster(all_boxes, iou_thr=0.15, min_votes=1):
+    """Cluster raw boxes from N frames into stable car positions."""
+    if len(all_boxes) == 0:
+        return []
+    clusters: list[list] = []
+    for box in all_boxes:
+        merged = False
+        for cl in clusters:
+            rep = np.mean(cl, axis=0)
+            if _asl_iou(box, rep) >= iou_thr:
+                cl.append(box.tolist())
+                merged = True
+                break
+        if not merged:
+            clusters.append([box.tolist()])
+    return [np.mean(cl, axis=0) for cl in clusters if len(cl) >= min_votes]
+
+
+def _asl_rows(avg_boxes, row_y_tol=0.55):
+    """Group averaged car boxes into rows by Y-centroid similarity."""
+    if not avg_boxes:
+        return []
+    tol = float(np.median([b[3] - b[1] for b in avg_boxes])) * row_y_tol
+    rows: list[list] = []
+    for box in sorted(avg_boxes, key=lambda b: (b[1] + b[3]) / 2):
+        cy = (box[1] + box[3]) / 2
+        placed = False
+        for row in rows:
+            if abs(cy - np.mean([(b[1]+b[3])/2 for b in row])) <= tol:
+                row.append(box)
+                placed = True
+                break
+        if not placed:
+            rows.append([box])
+    return [sorted(r, key=lambda b: b[0]) for r in rows]
+
+
+def _asl_fill_row(row_boxes, target_n=None, extend_ends=1):
+    """Fill gaps between detected cars and extend ends. Returns list of boxes."""
+    if not row_boxes:
+        return []
+    med_w = float(np.median([b[2]-b[0] for b in row_boxes]))
+    med_h = float(np.median([b[3]-b[1] for b in row_boxes]))
+    med_cy = float(np.median([(b[1]+b[3])/2 for b in row_boxes]))
+
+    def make_box(cx):
+        return [cx - med_w/2, med_cy - med_h/2, cx + med_w/2, med_cy + med_h/2]
+
+    result = list(row_boxes)
+    filled: list = []
+    for i, box in enumerate(result):
+        filled.append(box)
+        if i < len(result) - 1:
+            nb = result[i + 1]
+            gap = nb[0] - box[2]
+            if gap > med_w * 0.8:
+                n_miss = max(1, round(gap / med_w) - 1)
+                step = (nb[0] - box[2]) / (n_miss + 1)
+                for k in range(1, n_miss + 1):
+                    filled.append(make_box(box[2] + step * k))
+    filled = sorted(filled, key=lambda b: b[0])
+
+    for _ in range(extend_ends):
+        cx = filled[0][0] - med_w * 0.5
+        if cx > 0:
+            filled.insert(0, make_box(cx))
+        cx = filled[-1][2] + med_w * 0.5
+        filled.append(make_box(cx))
+
+    if target_n and target_n > 0:
+        while len(filled) > target_n:
+            filled.pop()
+        while len(filled) < target_n:
+            filled.append(make_box(filled[-1][2] + med_w * 0.5))
+
+    return filled
+
+
+def _asl_box_to_stall(box, pad_x=0.06, pad_y=0.04):
+    x1, y1, x2, y2 = box
+    pw, ph = (x2-x1)*pad_x, (y2-y1)*pad_y
+    return {'poly': [[int(x1-pw), int(y1-ph)], [int(x2+pw), int(y1-ph)],
+                     [int(x2+pw), int(y2+ph)], [int(x1-pw), int(y2+ph)]]}
+
+
+def auto_stalls(all_boxes, extend_ends=1, iou_thr=0.15, capacity=0, row_y_tol=0.55):
+    """Full pipeline: cluster box observations -> rows -> fill gaps -> extend ends.
+
+    all_boxes: (N, 4) array of YOLO xyxy boxes accumulated across multiple frames.
+    Returns list of {'poly': [[x,y]x4]} image-space stall dicts, or [] if
+    not enough data to form a layout.
+    """
+    avg = _asl_cluster(all_boxes, iou_thr=iou_thr, min_votes=1)
+    if not avg:
+        return []
+    rows = _asl_rows(avg, row_y_tol=row_y_tol)
+    per_row_cap = None
+    if capacity > 0 and rows:
+        n = sum(len(r) for r in rows)
+        per_row_cap = [round(capacity * len(r) / n) for r in rows]
+        per_row_cap[0] += capacity - sum(per_row_cap)
+    stalls = []
+    for ri, row in enumerate(rows):
+        cap_row = per_row_cap[ri] if per_row_cap else None
+        for box in _asl_fill_row(row, target_n=cap_row, extend_ends=extend_ends):
+            stalls.append(_asl_box_to_stall(box))
+    return stalls

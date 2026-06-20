@@ -43,7 +43,9 @@ UA = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)'}
 NYC = 'https://webcams.nyctmc.org/api/cameras/{}/image'
 PEAKS_FILE = 'work/peaks.json'  # most cars ever counted per lot — grounds capacity in real data
 
-_captures: dict = {}  # url -> cv2.VideoCapture, kept open across polls for live streams
+_captures: dict = {}   # url -> cv2.VideoCapture, kept open across polls for live streams
+_stall_obs: dict = {}  # lot_id -> list of (N,4) box arrays, accumulated until we have enough to derive stalls
+AUTO_STALL_FRAMES = 8  # frames of detections needed before auto-deriving stall layout
 
 
 def load_peaks():
@@ -176,7 +178,7 @@ def do_lot(model, calib, api, conf, imgsz, device, peaks, overlap=0.30, tile_img
             'capacity': len(states), 'open': open_n, 'refresh_sec': calib['refresh_sec'],
             'image': to_data_uri(viz),
         })
-        return taken, int(len(xy))
+        return taken, int(len(xy)), xy
 
     # overlap-robust lot membership: boundary (straddling) cars ARE counted, frame-edge
     # cars are flagged 'partial' (may be out of view) — classify once, reuse for the
@@ -223,7 +225,7 @@ def do_lot(model, calib, api, conf, imgsz, device, peaks, overlap=0.30, tile_img
         'partial': partial_n, 'capacity': capacity, 'peak': peak, 'refresh_sec': calib['refresh_sec'],
         'cv_count': cv_inside, 'audit': audit_out, 'image': to_data_uri(viz),
     })
-    return inside, int(len(xy))
+    return inside, int(len(xy)), xy
 
 
 def do_street(model, st, api, conf, imgsz, device):
@@ -286,14 +288,63 @@ def main():
             try:
                 if kind == 'lot':
                     c = calibs[cid]
-                    inside, total = do_lot(model, c, args.api, args.conf, args.lot_imgsz, args.device, peaks,
-                                           args.overlap, args.tile_imgsz, args.tile_grid,
-                                           audit_key, args.audit_model, audits, args.audit_gap)
+                    inside, total, xy = do_lot(model, c, args.api, args.conf, args.lot_imgsz, args.device, peaks,
+                                               args.overlap, args.tile_imgsz, args.tile_grid,
+                                               audit_key, args.audit_model, audits, args.audit_gap)
                     save_peaks(peaks)
                     g = c.get('tile_grid', args.tile_grid)
                     tag = f" [tiled {g}x{g}]" if c.get('tile') else ''
                     print(f"  [lot] {c['name']}:{tag} {inside} in-lot ({total} detected, peak {peaks.get(cid)})", flush=True)
                     due[(kind, cid)] = time.time() + c.get('refresh_sec', args.lot_interval)
+
+                    # ── auto-stall learning ──────────────────────────────────
+                    # When a lot has no stall layout yet, accumulate YOLO boxes
+                    # across frames. After AUTO_STALL_FRAMES with detections,
+                    # derive the stall layout using row-analysis + gap-fill +
+                    # end-extension, persist to calib JSON, and reload so the
+                    # very next poll uses exact per-stall occupancy.
+                    if not c.get('stalls') and len(xy):
+                        obs = _stall_obs.setdefault(cid, [])
+                        obs.append(xy)
+                        frames_so_far = len(obs)
+                        print(f"  [auto-stall] {cid}: {frames_so_far}/{AUTO_STALL_FRAMES} frames collected", flush=True)
+                        if frames_so_far >= AUTO_STALL_FRAMES:
+                            all_boxes = np.vstack(obs)
+                            stalls = spatial.auto_stalls(
+                                all_boxes,
+                                extend_ends=1,
+                                iou_thr=0.15,
+                                capacity=c.get('capacity', 0),
+                            )
+                            if stalls:
+                                # derive tight lot quad from stall extents
+                                all_pts = [pt for s in stalls for pt in s['poly']]
+                                pts = np.array(all_pts)
+                                marg = 30
+                                h_f, w_f = (c['frame'][1], c['frame'][0]) if 'frame' in c else (720, 1280)
+                                q = [
+                                    [int(max(0, pts[:,0].min()-marg)), int(max(0, pts[:,1].min()-marg))],
+                                    [int(min(w_f, pts[:,0].max()+marg)), int(max(0, pts[:,1].min()-marg))],
+                                    [int(min(w_f, pts[:,0].max()+marg)), int(min(h_f, pts[:,1].max()+marg))],
+                                    [int(max(0, pts[:,0].min()-marg)), int(min(h_f, pts[:,1].max()+marg))],
+                                ]
+                                mw, mh = c.get('map_size', [600, 400])
+                                H = spatial.homography(q, mw, mh)
+                                layout = [{'poly': [[round(float(x),1), round(float(y),1)] for x, y in
+                                           spatial.project(H, s['poly'])]} for s in stalls]
+                                c['stalls'] = stalls
+                                c['layout'] = layout
+                                c['lot_quad'] = q
+                                c['capacity'] = len(stalls)
+                                c['surface'] = c.get('surface', 'paved')
+                                calibs[cid] = c
+                                calib_path = os.path.join('calib', f'{cid}.json')
+                                json.dump(c, open(calib_path, 'w'), indent=2)
+                                _stall_obs.pop(cid, None)
+                                print(f"  [auto-stall] {cid}: DERIVED {len(stalls)} stalls — switching to stall mode", flush=True)
+                            else:
+                                _stall_obs[cid] = obs[-4:]  # keep recent frames, discard old
+                                print(f"  [auto-stall] {cid}: not enough distinct positions yet, retrying…", flush=True)
                 else:
                     st = next(s for s in STREETS if s['id'] == cid)
                     n = do_street(model, st, args.api, args.conf, args.imgsz, args.device)
