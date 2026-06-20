@@ -46,16 +46,16 @@ export default function StreamPage() {
     };
 
     poll();
-    const pollId = setInterval(poll, 2000);
+    const pollId = setInterval(poll, 500);
 
-    // approx fps counter
+    // tick clock and fps counter
+    const clockId = setInterval(() => setNow(Date.now()), 1000);
     const fpsId = setInterval(() => {
       setFps(frameCount);
       frameCount = 0;
-      setNow(Date.now());
     }, 10000);
 
-    return () => { on = false; clearInterval(pollId); clearInterval(fpsId); };
+    return () => { on = false; clearInterval(pollId); clearInterval(clockId); clearInterval(fpsId); };
   }, []);
 
   const inside = occ?.inside ?? occ?.count ?? 0;

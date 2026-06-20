@@ -302,7 +302,7 @@ def main():
             except Exception as e:
                 print(f"  skip {kind}:{cid}: {type(e).__name__} {e}", flush=True)
                 due[(kind, cid)] = time.time() + 15
-        time.sleep(1)
+        time.sleep(0.1)
 
 
 if __name__ == '__main__':

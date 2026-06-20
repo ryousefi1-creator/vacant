@@ -4,7 +4,7 @@
   "type": "lot",
   "surface": "gravel",
   "url": "rtmp://localhost:1935/live/mylot",
-  "refresh_sec": 3,
+  "refresh_sec": 1,
   "lot_quad": [
     [0, 0],
     [1920, 0],
