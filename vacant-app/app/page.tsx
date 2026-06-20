@@ -173,9 +173,9 @@ export default function Landing() {
         <section className="border-y border-zinc-200/80 bg-white">
           <div className="mx-auto grid w-full max-w-6xl grid-cols-1 divide-y divide-zinc-200/80 px-5 py-12 sm:grid-cols-3 sm:divide-x sm:divide-y-0 sm:px-8 sm:py-14">
             {[
-              { v: '17 hrs', l: 'the average driver spends hunting for parking each year' },
-              { v: '$345', l: 'wasted per driver annually in time, fuel, and fees' },
-              { v: '30%', l: 'of city traffic is just cars looking for a space' },
+              { v: '$73B', l: 'wasted every year in the US just looking for parking' },
+              { v: '107 hrs', l: 'a year the average New York driver loses to the hunt' },
+              { v: '30%', l: 'of busy downtown traffic can be cars circling for a space' },
             ].map((s, i) => (
               <div key={s.v} className={`reveal reveal-d${i + 1} flex flex-col items-center py-6 text-center sm:px-6 sm:py-0`}>
                 <span className="font-mono text-[clamp(2.5rem,6vw,4rem)] font-bold leading-none tracking-tight text-emerald-600">{s.v}</span>
@@ -287,8 +287,9 @@ export default function Landing() {
           </a>
         </div>
         <div className="border-t border-zinc-200/80">
-          <div className="mx-auto w-full max-w-6xl px-5 py-5 text-xs text-zinc-400 sm:px-8">
-            &copy; {new Date().getFullYear()} Vacant &middot; Find the open spot before you leave.
+          <div className="mx-auto flex w-full max-w-6xl flex-col gap-2 px-5 py-5 text-xs text-zinc-400 sm:flex-row sm:items-center sm:justify-between sm:px-8">
+            <span>&copy; {new Date().getFullYear()} Vacant &middot; Find the open spot before you leave.</span>
+            <a href="/credits" className="font-medium transition-colors hover:text-zinc-700">Backers &amp; credits</a>
           </div>
         </div>
       </footer>
