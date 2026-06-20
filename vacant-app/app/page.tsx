@@ -118,8 +118,9 @@ export default function Home() {
       </header>
 
       {/* content */}
-      <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '1fr 360px', overflow: 'hidden' }}>
-        <section style={{ position: 'relative', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 18 }}>
+      <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '1fr 400px', overflow: 'hidden' }}>
+        {/* main — 2D/3D map */}
+        <section style={{ position: 'relative', overflow: 'hidden', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 18 }}>
           <div style={{ position: 'absolute', top: 14, left: 24, zIndex: 5, color: '#6b7a8d', fontSize: 12.5, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ width: 8, height: 8, borderRadius: '50%', background: cur ? (isLot ? '#10b981' : '#3b82f6') : '#9aa6b2' }} />
             {cur ? cur.name : 'no location'} · {isLot ? `${cur?.surface ?? ''} lot` : 'street'}
@@ -154,7 +155,23 @@ export default function Home() {
             )}
         </section>
 
-        <aside style={{ background: '#fff', borderLeft: '1px solid #e7ecf0', padding: '24px 24px', boxShadow: '-18px 0 40px rgba(13,27,42,.06)', overflowY: 'auto' }}>
+        {/* sidebar — camera feed on top, stats below */}
+        <aside style={{ background: '#fff', borderLeft: '1px solid #e7ecf0', boxShadow: '-18px 0 40px rgba(13,27,42,.06)', overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+
+          {/* camera feed — prominent at top */}
+          <div style={{ padding: '16px 20px 12px', borderBottom: '1px solid #f0f4f7' }}>
+            <div style={{ color: '#6b7a8d', textTransform: 'uppercase', letterSpacing: '1.4px', fontSize: 11, fontWeight: 600, marginBottom: 10 }}>
+              Camera · live detection
+            </div>
+            <div style={{ borderRadius: 12, overflow: 'hidden', border: '1px solid #e7ecf0', background: '#0d1b2a', aspectRatio: '16/9', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              {cur?.image
+                ? <img src={cur.image} alt="live" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                : <span style={{ color: '#6b7a8d', fontSize: 12 }}>waiting for frame…</span>}
+            </div>
+          </div>
+
+          {/* stats below camera */}
+          <div style={{ padding: '20px 24px', flex: 1 }}>
           {isLot ? (
             <>
               <div style={{ color: '#6b7a8d', textTransform: 'uppercase', letterSpacing: '1.4px', fontSize: 11, fontWeight: 600 }}>
@@ -176,8 +193,6 @@ export default function Home() {
                 </div>
               )}
               {cur?.audit && (
-                // public-facing: always the positive "vision-checked" — the count is AI-verified
-                // either way. The raw CV count / any correction stays internal (worker log + API data).
                 <div style={{ marginTop: 10, marginLeft: cur?.peak ? 8 : 0, display: 'inline-flex', alignItems: 'center', gap: 7, padding: '5px 11px', borderRadius: 30,
                   background: '#ecfdf5', color: '#047857', fontSize: 11.5, fontWeight: 600 }}>
                   <span>✓</span>
@@ -205,15 +220,6 @@ export default function Home() {
             </>
           )}
 
-          <div style={{ marginTop: 22 }}>
-            <div style={{ color: '#6b7a8d', textTransform: 'uppercase', letterSpacing: '1.4px', fontSize: 11, fontWeight: 600, marginBottom: 10 }}>Camera · live detection</div>
-            <div style={{ borderRadius: 14, overflow: 'hidden', border: '1px solid #e7ecf0', background: '#0d1b2a', aspectRatio: '16/9', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              {cur?.image
-                ? <img src={cur.image} alt="live" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                : <span style={{ color: '#6b7a8d', fontSize: 12 }}>waiting for frame…</span>}
-            </div>
-          </div>
-
           <div style={{ display: 'flex', gap: 10, marginTop: 14, flexWrap: 'wrap' }}>
             {isLot && <span style={{ padding: '5px 12px', borderRadius: 30, fontSize: 11.5, fontWeight: 600, color: '#fff', background: 'linear-gradient(160deg,#10b981,#059669)' }}>{status}</span>}
             <span style={{ padding: '5px 12px', borderRadius: 30, fontSize: 11.5, fontWeight: 600, color: '#6b7a8d', background: '#f0f3f6' }}>{cadence(cur?.refresh_sec ?? null)}</span>
@@ -226,6 +232,7 @@ export default function Home() {
             Live from real public cameras — Boulder County trailhead <b style={{ color: '#059669' }}>lots</b> (calibrated per-spot)
             and NYC DOT <b style={{ color: '#3b82f6' }}>streets</b>. Lot cars are drawn where they actually are, via a one-time
             homography calibration per camera.
+          </div>
           </div>
         </aside>
       </div>
