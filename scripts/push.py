@@ -36,6 +36,8 @@ UA = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)'}
 NYC = 'https://webcams.nyctmc.org/api/cameras/{}/image'
 PEAKS_FILE = 'work/peaks.json'  # most cars ever counted per lot — grounds capacity in real data
 
+_captures: dict = {}  # url -> cv2.VideoCapture, kept open across polls for live streams
+
 
 def load_peaks():
     try:
@@ -59,6 +61,22 @@ STREETS = [
 
 
 def fetch(url):
+    # Live streams (rtmp/rtsp/srt) use a persistent VideoCapture; JPEG snapshots use urllib
+    if url.startswith(('rtmp://', 'rtsp://', 'srt://')):
+        cap = _captures.get(url)
+        if cap is None or not cap.isOpened():
+            cap = cv2.VideoCapture(url)
+            if not cap.isOpened():
+                raise RuntimeError(f'cannot open stream: {url}')
+            _captures[url] = cap
+        # Drain buffered frames so we get the most recent one
+        for _ in range(5):
+            cap.grab()
+        ok, frame = cap.read()
+        if not ok:
+            _captures.pop(url, None)
+            raise RuntimeError('stream read failed — will reconnect next poll')
+        return frame
     data = urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=12).read()
     return cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
 

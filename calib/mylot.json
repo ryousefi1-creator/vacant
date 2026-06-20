@@ -1,0 +1,17 @@
+{
+  "id": "mylot",
+  "name": "My Parking Lot",
+  "type": "lot",
+  "surface": "gravel",
+  "url": "rtmp://localhost:1935/live/mylot",
+  "refresh_sec": 3,
+  "lot_quad": [
+    [0, 0],
+    [1920, 0],
+    [1920, 1080],
+    [0, 1080]
+  ],
+  "map_size": [600, 380],
+  "capacity": 20,
+  "stalls": null
+}
