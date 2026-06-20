@@ -1,14 +1,16 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
+
+const HLS_URL = 'http://localhost:8888/live/mylot/index.m3u8';
 
 type OccData = {
   id: string; name: string; inside: number | null; count: number;
   capacity: number | null; peak: number | null; ts: number;
-  image: string | null; cv_count?: number | null;
+  image: string | null;
 };
 
-function Timestamp() {
+function Clock() {
   const [t, setT] = useState('');
   useEffect(() => {
     const tick = () => setT(new Date().toLocaleTimeString([], { hour12: false }));
@@ -20,203 +22,187 @@ function Timestamp() {
 }
 
 export default function StreamPage() {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [hlsState, setHlsState] = useState<'connecting' | 'live' | 'offline'>('connecting');
   const [occ, setOcc] = useState<OccData | null>(null);
-  const [lastFrame, setLastFrame] = useState<string | null>(null);
-  const [fps, setFps] = useState(0);
+  const [detectionFrame, setDetectionFrame] = useState<string | null>(null);
+  const [showDetection, setShowDetection] = useState(false);
   const [now, setNow] = useState(Date.now());
 
+  // HLS player
   useEffect(() => {
-    let frameCount = 0;
-    let lastTs = 0;
-    let on = true;
+    const video = videoRef.current;
+    if (!video) return;
+    let hls: import('hls.js').default | null = null;
 
+    async function init() {
+      const Hls = (await import('hls.js')).default;
+      if (Hls.isSupported()) {
+        hls = new Hls({ lowLatencyMode: true, maxBufferLength: 2, liveSyncDurationCount: 1 });
+        hls.loadSource(HLS_URL);
+        hls.attachMedia(video!);
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          setHlsState('live');
+          video!.play().catch(() => {});
+        });
+        hls.on(Hls.Events.ERROR, (_e: unknown, data: import('hls.js').ErrorData) => {
+          if (data.fatal) setHlsState('offline');
+        });
+      } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        video.src = HLS_URL;
+        video.addEventListener('loadedmetadata', () => { setHlsState('live'); video.play().catch(() => {}); });
+        video.addEventListener('error', () => setHlsState('offline'));
+      }
+    }
+    init();
+    return () => { hls?.destroy(); };
+  }, []);
+
+  // Detection data + annotated frame
+  useEffect(() => {
+    let on = true;
     const poll = async () => {
       try {
         const r = await fetch('/api/occupancy', { cache: 'no-store' });
         const data = await r.json();
         const lot: OccData | undefined = data['mylot'];
-        if (!lot) return;
+        if (!lot || !on) return;
         setOcc(lot);
-        if (lot.image && lot.ts !== lastTs) {
-          lastTs = lot.ts;
-          setLastFrame(lot.image);
-          frameCount++;
-        }
+        if (lot.image) setDetectionFrame(lot.image);
       } catch {}
     };
-
     poll();
-    const pollId = setInterval(poll, 500);
-
-    // tick clock and fps counter
+    const id = setInterval(poll, 500);
     const clockId = setInterval(() => setNow(Date.now()), 1000);
-    const fpsId = setInterval(() => {
-      setFps(frameCount);
-      frameCount = 0;
-    }, 10000);
-
-    return () => { on = false; clearInterval(pollId); clearInterval(clockId); clearInterval(fpsId); };
+    return () => { on = false; clearInterval(id); clearInterval(clockId); };
   }, []);
 
   const inside = occ?.inside ?? occ?.count ?? 0;
   const cap = occ?.capacity ?? null;
   const pct = cap ? Math.min(100, Math.round((inside / cap) * 100)) : 0;
   const ago = occ?.ts ? Math.round((now - occ.ts) / 1000) : null;
-  const live = ago != null && ago < 12;
-  const status = !occ ? 'waiting' : !live ? 'stale' : 'live';
+  const detectionLive = ago != null && ago < 10;
+  const hlsLive = hlsState === 'live';
+
+  const barColor = pct > 85 ? '#ff4444' : pct > 60 ? '#f59e0b' : '#00ff88';
 
   return (
-    <div style={{
-      minHeight: '100vh', background: '#080f18',
-      display: 'flex', flexDirection: 'column',
-      fontFamily: '"Courier New", "Courier", monospace',
-      color: '#00ff88',
-    }}>
+    <div style={{ minHeight: '100vh', background: '#080f18', display: 'flex', flexDirection: 'column', fontFamily: '"Courier New", monospace', color: '#00ff88' }}>
 
       {/* top bar */}
-      <header style={{
-        padding: '10px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        borderBottom: '1px solid rgba(0,255,136,.15)', background: 'rgba(0,255,136,.03)',
-      }}>
+      <header style={{ padding: '10px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid rgba(0,255,136,.12)', background: 'rgba(0,255,136,.02)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          <Link href="/" style={{ color: '#3a8c60', fontSize: 12, fontWeight: 600, textDecoration: 'none' }}>
-            ← DASHBOARD
-          </Link>
-          <span style={{ color: '#1a3d28', fontSize: 12 }}>|</span>
-          <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: 2 }}>SECURITY CAM · CAM-01 · MY PARKING LOT</span>
+          <Link href="/" style={{ color: '#3a8c60', fontSize: 12, fontWeight: 600, textDecoration: 'none' }}>← DASHBOARD</Link>
+          <span style={{ color: '#1a3d28' }}>|</span>
+          <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: 2 }}>CAM-01 · MY PARKING LOT</span>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 14, fontSize: 11, letterSpacing: 1 }}>
-          <span style={{ color: '#3a8c60' }}><Timestamp /></span>
-          <span style={{
-            padding: '3px 10px', borderRadius: 3, fontSize: 11, fontWeight: 700, letterSpacing: 1,
-            background: status === 'live' ? 'rgba(0,255,136,.15)' : 'rgba(255,60,60,.15)',
-            color: status === 'live' ? '#00ff88' : '#ff4444',
-            border: `1px solid ${status === 'live' ? 'rgba(0,255,136,.4)' : 'rgba(255,60,60,.4)'}`,
-          }}>
-            {status === 'live' ? '● REC' : status === 'stale' ? '○ STALE' : '○ WAITING'}
-          </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+          <span style={{ color: '#3a8c60', fontSize: 11, letterSpacing: 1 }}><Clock /></span>
+          <div style={{ display: 'flex', gap: 6 }}>
+            {[{ label: 'LIVE', on: hlsLive }, { label: 'AI', on: detectionLive }].map(({ label, on }) => (
+              <span key={label} style={{ padding: '2px 9px', borderRadius: 3, fontSize: 10, fontWeight: 700, letterSpacing: 1, background: on ? 'rgba(0,255,136,.15)' : 'rgba(255,60,60,.1)', color: on ? '#00ff88' : '#ff4444', border: `1px solid ${on ? 'rgba(0,255,136,.35)' : 'rgba(255,60,60,.3)'}` }}>
+                {on ? '●' : '○'} {label}
+              </span>
+            ))}
+          </div>
         </div>
       </header>
 
-      {/* main grid */}
-      <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '1fr 260px', overflow: 'hidden' }}>
+      <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '1fr 240px', overflow: 'hidden' }}>
 
-        {/* camera feed */}
+        {/* camera */}
         <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, overflow: 'hidden' }}>
 
-          {/* scanline overlay */}
-          <div style={{
-            position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 10,
-            backgroundImage: 'repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,.08) 2px, rgba(0,0,0,.08) 4px)',
-          }} />
+          {/* scanlines */}
+          <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 10, backgroundImage: 'repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,.07) 2px,rgba(0,0,0,.07) 4px)' }} />
 
-          {/* corner brackets */}
-          {[['0','0','1,0,0,1'], ['0','auto','1,0,0,-1'], ['auto','0','-1,0,0,1'], ['auto','auto','-1,0,0,-1']].map(([t,b,m], i) => (
-            <div key={i} style={{ position: 'absolute', top: t === 'auto' ? undefined : 28, bottom: b === 'auto' ? undefined : 28,
-              left: i < 2 ? 28 : undefined, right: i >= 2 ? 28 : undefined, width: 24, height: 24, zIndex: 11,
-              borderTop: i < 2 ? '2px solid rgba(0,255,136,.6)' : 'none',
-              borderBottom: i >= 2 ? '2px solid rgba(0,255,136,.6)' : 'none',
-              borderLeft: i === 0 || i === 2 ? '2px solid rgba(0,255,136,.6)' : 'none',
-              borderRight: i === 1 || i === 3 ? '2px solid rgba(0,255,136,.6)' : 'none',
-            }} />
-          ))}
+          <div style={{ width: '100%', maxWidth: 960, position: 'relative' }}>
+            <div style={{ borderRadius: 4, overflow: 'hidden', background: '#030810', aspectRatio: '16/9', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid rgba(0,255,136,.18)', boxShadow: '0 0 60px rgba(0,255,136,.05)' }}>
 
-          <div style={{ width: '100%', maxWidth: 900, position: 'relative' }}>
-            <div style={{
-              borderRadius: 4, overflow: 'hidden', background: '#030810',
-              aspectRatio: '16/9', display: 'flex', alignItems: 'center', justifyContent: 'center',
-              border: '1px solid rgba(0,255,136,.2)',
-              boxShadow: '0 0 40px rgba(0,255,136,.06)',
-            }}>
-              {lastFrame
-                ? <img src={lastFrame} alt="detection feed" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
-                : (
-                  <div style={{ textAlign: 'center' }}>
-                    <div style={{ color: 'rgba(0,255,136,.3)', fontSize: 48, marginBottom: 12 }}>⬛</div>
-                    <div style={{ color: 'rgba(0,255,136,.5)', fontSize: 13, letterSpacing: 2 }}>
-                      {occ ? 'AWAITING FRAME…' : 'NO SIGNAL'}
-                    </div>
-                    <div style={{ color: 'rgba(0,255,136,.25)', fontSize: 11, marginTop: 8, letterSpacing: 1 }}>
-                      {occ ? 'DETECTION WORKER CONNECTED' : 'START: python scripts/push.py'}
-                    </div>
+              {/* HLS video — always mounted, hidden when showing detection frame */}
+              <video ref={videoRef} muted playsInline style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', display: (!showDetection && hlsLive) ? 'block' : 'none' }} />
+
+              {/* Detection frame */}
+              {showDetection && detectionFrame && (
+                <img src={detectionFrame} alt="detection" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
+              )}
+
+              {/* No signal */}
+              {!hlsLive && !detectionFrame && (
+                <div style={{ textAlign: 'center', zIndex: 2 }}>
+                  <div style={{ color: 'rgba(0,255,136,.25)', fontSize: 42, marginBottom: 10 }}>⬛</div>
+                  <div style={{ color: 'rgba(0,255,136,.45)', fontSize: 12, letterSpacing: 2 }}>NO SIGNAL</div>
+                  <div style={{ color: 'rgba(0,255,136,.2)', fontSize: 10, marginTop: 6, letterSpacing: 1 }}>Start Larix to stream</div>
+                </div>
+              )}
+
+              {/* HUD */}
+              {(hlsLive || detectionFrame) && (
+                <>
+                  <div style={{ position: 'absolute', top: 10, left: 12, zIndex: 5, fontSize: 10, color: 'rgba(0,255,136,.65)', letterSpacing: 1, textShadow: '0 0 8px rgba(0,255,136,.6)' }}>
+                    {showDetection ? 'YOLO11x · DETECTION VIEW' : 'LIVE · LARIX RTMP → HLS'}
                   </div>
-                )}
+                  <div style={{ position: 'absolute', bottom: 10, left: 12, zIndex: 5, fontSize: 11, color: 'rgba(0,255,136,.6)', letterSpacing: 1 }}>
+                    VEHICLES: <span style={{ color: barColor, fontWeight: 700 }}>{occ?.count ?? '—'}</span>
+                  </div>
+                  <div style={{ position: 'absolute', bottom: 10, right: 12, zIndex: 5, fontSize: 11, color: 'rgba(0,255,136,.6)', letterSpacing: 1 }}>
+                    IN-LOT: <span style={{ color: '#00ff88', fontWeight: 700 }}>{inside}</span>{cap != null && <span style={{ color: 'rgba(0,255,136,.35)' }}> / {cap}</span>}
+                  </div>
+                </>
+              )}
             </div>
 
-            {/* HUD overlays */}
-            {lastFrame && (
-              <>
-                <div style={{ position: 'absolute', top: 10, left: 12, fontSize: 11, color: 'rgba(0,255,136,.7)', letterSpacing: 1, textShadow: '0 0 8px rgba(0,255,136,.8)' }}>
-                  CAM-01 · MY PARKING LOT
-                </div>
-                <div style={{ position: 'absolute', top: 10, right: 12, fontSize: 11, color: 'rgba(0,255,136,.7)', letterSpacing: 1, textShadow: '0 0 8px rgba(0,255,136,.8)' }}>
-                  YOLO11x · {ago != null ? `${ago}s AGO` : '—'}
-                </div>
-                <div style={{ position: 'absolute', bottom: 10, left: 12, fontSize: 11, color: 'rgba(0,255,136,.6)', letterSpacing: 1 }}>
-                  VEHICLES DETECTED: <span style={{ color: '#00ff88', fontWeight: 700 }}>{occ?.count ?? 0}</span>
-                </div>
-                <div style={{ position: 'absolute', bottom: 10, right: 12, fontSize: 11, color: 'rgba(0,255,136,.6)', letterSpacing: 1 }}>
-                  IN-LOT: <span style={{ color: '#00ff88', fontWeight: 700 }}>{inside}</span>
-                  {cap != null && <span style={{ color: 'rgba(0,255,136,.4)' }}> / {cap}</span>}
-                </div>
-              </>
-            )}
+            {/* view toggle */}
+            <div style={{ marginTop: 10, display: 'flex', gap: 8, justifyContent: 'center' }}>
+              {[{ label: '▶ LIVE FEED', val: false }, { label: '⬡ DETECTION VIEW', val: true }].map(({ label, val }) => (
+                <button key={label} onClick={() => setShowDetection(val)} style={{ cursor: 'pointer', border: `1px solid ${showDetection === val ? 'rgba(0,255,136,.5)' : 'rgba(0,255,136,.15)'}`, background: showDetection === val ? 'rgba(0,255,136,.12)' : 'transparent', color: showDetection === val ? '#00ff88' : 'rgba(0,255,136,.4)', borderRadius: 3, padding: '5px 14px', fontSize: 10, fontWeight: 700, letterSpacing: 1.5 }}>
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 
         {/* side panel */}
-        <aside style={{ borderLeft: '1px solid rgba(0,255,136,.1)', padding: '20px 18px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 20 }}>
-
-          {/* occupancy meter */}
+        <aside style={{ borderLeft: '1px solid rgba(0,255,136,.08)', padding: '20px 16px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 18 }}>
           <div>
-            <div style={{ fontSize: 10, letterSpacing: 2, color: 'rgba(0,255,136,.5)', marginBottom: 8 }}>LOT OCCUPANCY</div>
-            <div style={{ fontSize: 52, fontWeight: 700, lineHeight: 1, color: pct > 85 ? '#ff4444' : pct > 60 ? '#f59e0b' : '#00ff88', letterSpacing: -1 }}>
-              {pct}<span style={{ fontSize: 18, color: 'rgba(0,255,136,.4)' }}>%</span>
+            <div style={{ fontSize: 10, letterSpacing: 2, color: 'rgba(0,255,136,.4)', marginBottom: 6 }}>OCCUPANCY</div>
+            <div style={{ fontSize: 52, fontWeight: 700, lineHeight: 1, color: barColor, letterSpacing: -1 }}>
+              {pct}<span style={{ fontSize: 16, color: 'rgba(0,255,136,.35)' }}>%</span>
             </div>
-            <div style={{ marginTop: 10, height: 6, background: 'rgba(0,255,136,.1)', borderRadius: 2, overflow: 'hidden' }}>
-              <div style={{
-                height: '100%', borderRadius: 2, transition: 'width .6s ease',
-                width: `${pct}%`,
-                background: pct > 85 ? '#ff4444' : pct > 60 ? '#f59e0b' : '#00ff88',
-              }} />
+            <div style={{ marginTop: 8, height: 5, background: 'rgba(0,255,136,.08)', borderRadius: 2, overflow: 'hidden' }}>
+              <div style={{ height: '100%', width: `${pct}%`, background: barColor, borderRadius: 2, transition: 'width .5s ease' }} />
             </div>
-            <div style={{ marginTop: 6, fontSize: 11, color: 'rgba(0,255,136,.4)', letterSpacing: 1 }}>
-              {inside} PARKED · {cap != null ? cap - inside : '?'} OPEN
-            </div>
+            <div style={{ marginTop: 5, fontSize: 10, color: 'rgba(0,255,136,.35)', letterSpacing: 1 }}>{inside} PARKED · {cap != null ? cap - inside : '?'} OPEN</div>
           </div>
 
-          <div style={{ borderTop: '1px solid rgba(0,255,136,.08)' }} />
+          <div style={{ borderTop: '1px solid rgba(0,255,136,.07)' }} />
 
-          {/* stats */}
           {[
-            { label: 'DETECTED', value: occ?.count ?? '—' },
-            { label: 'IN-LOT', value: inside },
-            { label: 'CAPACITY', value: cap ?? '—' },
-            { label: 'PEAK', value: occ?.peak ?? '—' },
-          ].map(({ label, value }) => (
+            ['DETECTED', occ?.count ?? '—'],
+            ['IN-LOT', inside],
+            ['CAPACITY', cap ?? '—'],
+            ['PEAK', occ?.peak ?? '—'],
+          ].map(([label, value]) => (
             <div key={label}>
-              <div style={{ fontSize: 10, letterSpacing: 2, color: 'rgba(0,255,136,.35)', marginBottom: 3 }}>{label}</div>
-              <div style={{ fontSize: 22, fontWeight: 700, color: '#00ff88', letterSpacing: -0.5 }}>{value}</div>
+              <div style={{ fontSize: 9, letterSpacing: 2, color: 'rgba(0,255,136,.3)', marginBottom: 2 }}>{label}</div>
+              <div style={{ fontSize: 20, fontWeight: 700, color: '#00ff88' }}>{value}</div>
             </div>
           ))}
 
-          <div style={{ borderTop: '1px solid rgba(0,255,136,.08)' }} />
+          <div style={{ borderTop: '1px solid rgba(0,255,136,.07)' }} />
 
-          {/* status */}
-          <div>
-            <div style={{ fontSize: 10, letterSpacing: 2, color: 'rgba(0,255,136,.35)', marginBottom: 8 }}>FEED STATUS</div>
-            {[
-              { label: 'SOURCE', value: 'LARIX RTMP' },
-              { label: 'MODEL', value: 'YOLO11x' },
-              { label: 'REFRESH', value: '~3s' },
-              { label: 'LAST UPDATE', value: ago != null ? `${ago}s ago` : '—' },
-            ].map(({ label, value }) => (
-              <div key={label} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6, fontSize: 11, letterSpacing: .5 }}>
-                <span style={{ color: 'rgba(0,255,136,.35)' }}>{label}</span>
-                <span style={{ color: 'rgba(0,255,136,.7)' }}>{value}</span>
-              </div>
-            ))}
-          </div>
+          {[
+            ['VIDEO', hlsLive ? 'LIVE' : 'OFFLINE'],
+            ['AI UPDATE', ago != null ? `${ago}s AGO` : '—'],
+            ['INFER SIZE', '640px'],
+            ['MODEL', 'YOLO11x'],
+          ].map(([label, value]) => (
+            <div key={label} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, letterSpacing: .5 }}>
+              <span style={{ color: 'rgba(0,255,136,.3)' }}>{label}</span>
+              <span style={{ color: 'rgba(0,255,136,.65)' }}>{value}</span>
+            </div>
+          ))}
         </aside>
       </div>
     </div>
