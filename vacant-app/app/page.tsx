@@ -21,11 +21,17 @@ function cadence(refresh: number | null): string {
   return `source refreshes ~${refresh}s`;
 }
 
+const EMPTY_FORM = { name: '', url: '', capacity: '' };
+
 export default function Home() {
   const [data, setData] = useState<Record<string, Occ>>({});
   const [active, setActive] = useState<string | null>(null);
   const [now, setNow] = useState(0);
   const [view3d, setView3d] = useState(false);
+  const [showAdd, setShowAdd] = useState(false);
+  const [form, setForm] = useState(EMPTY_FORM);
+  const [adding, setAdding] = useState(false);
+  const [addErr, setAddErr] = useState<string | null>(null);
 
   useEffect(() => {
     let on = true;
@@ -59,6 +65,25 @@ export default function Home() {
   const estCap = isLot && !stallList && cur?.surface === 'gravel'; // gravel = estimate; real marked stalls = exact
   const status = pct > 90 ? 'Packed' : pct > 75 ? 'Busy' : pct > 45 ? 'Moderate' : 'Wide open';
   const ago = cur?.ts ? Math.round((Math.max(now, Date.now()) - cur.ts) / 1000) : null;
+
+  async function handleAddLot(e: React.FormEvent) {
+    e.preventDefault();
+    setAdding(true); setAddErr(null);
+    try {
+      const r = await fetch('/api/lots', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: form.name, url: form.url, capacity: Number(form.capacity) || 0 }),
+      });
+      const j = await r.json();
+      if (!r.ok || j.error) throw new Error(j.error || 'failed');
+      setShowAdd(false); setForm(EMPTY_FORM);
+    } catch (err) {
+      setAddErr(String(err));
+    } finally {
+      setAdding(false);
+    }
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100%', overflow: 'hidden', color: '#0d1b2a',
@@ -97,8 +122,15 @@ export default function Home() {
             </Link>
           </div>
         </div>
-        <div style={{ display: 'flex', gap: 8, overflowX: 'auto', padding: '14px 0 12px', scrollbarWidth: 'thin' }}>
+        <div style={{ display: 'flex', gap: 8, overflowX: 'auto', padding: '14px 0 12px', scrollbarWidth: 'thin', alignItems: 'center' }}>
           {locs.length === 0 && <span style={{ color: '#8a97a6', fontSize: 13, padding: '8px 0' }}>waiting for the camera worker… (run scripts/push.py)</span>}
+          <button onClick={() => { setShowAdd(true); setAddErr(null); }} style={{
+            flexShrink: 0, cursor: 'pointer', border: '1.5px dashed #c5cfd8',
+            background: 'transparent', color: '#6b7a8d', borderRadius: 11, padding: '7px 13px',
+            fontSize: 12.5, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6,
+          }}>
+            <span style={{ fontSize: 16, lineHeight: 1 }}>+</span> Add Lot
+          </button>
           {locs.map((l) => {
             const on = l.id === activeId;
             const n = l.type === 'lot' ? (l.inside ?? l.count) : l.count;
@@ -236,6 +268,85 @@ export default function Home() {
           </div>
         </aside>
       </div>
+      {/* Add Lot modal */}
+      {showAdd && (
+        <div onClick={() => setShowAdd(false)} style={{
+          position: 'fixed', inset: 0, background: 'rgba(13,27,42,.45)', backdropFilter: 'blur(4px)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100,
+        }}>
+          <form onClick={(e) => e.stopPropagation()} onSubmit={handleAddLot} style={{
+            background: '#fff', borderRadius: 18, padding: '32px 28px', width: 420, maxWidth: '92vw',
+            boxShadow: '0 24px 64px rgba(13,27,42,.22)', display: 'flex', flexDirection: 'column', gap: 18,
+          }}>
+            <div style={{ fontWeight: 800, fontSize: 18, color: '#0d1b2a', letterSpacing: '-.3px' }}>Add Parking Lot</div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <label style={{ fontSize: 12, fontWeight: 600, color: '#6b7a8d', textTransform: 'uppercase', letterSpacing: '1px' }}>Lot Name</label>
+              <input
+                required autoFocus value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+                placeholder="e.g. HWPARKING2" style={{
+                  border: '1.5px solid #e1e7ec', borderRadius: 10, padding: '10px 13px',
+                  fontSize: 14, fontWeight: 500, outline: 'none', color: '#0d1b2a',
+                  transition: 'border-color .15s',
+                }}
+                onFocus={e => e.target.style.borderColor = '#10b981'}
+                onBlur={e => e.target.style.borderColor = '#e1e7ec'}
+              />
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <label style={{ fontSize: 12, fontWeight: 600, color: '#6b7a8d', textTransform: 'uppercase', letterSpacing: '1px' }}>Stream URL</label>
+              <input
+                required value={form.url} onChange={e => setForm(f => ({ ...f, url: e.target.value }))}
+                placeholder="rtmp://… or rtsp://…" style={{
+                  border: '1.5px solid #e1e7ec', borderRadius: 10, padding: '10px 13px',
+                  fontSize: 13, fontWeight: 500, outline: 'none', color: '#0d1b2a', fontFamily: 'monospace',
+                }}
+                onFocus={e => e.target.style.borderColor = '#10b981'}
+                onBlur={e => e.target.style.borderColor = '#e1e7ec'}
+              />
+              <span style={{ fontSize: 11, color: '#a3adb8' }}>Larix / IP camera RTMP or RTSP address</span>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <label style={{ fontSize: 12, fontWeight: 600, color: '#6b7a8d', textTransform: 'uppercase', letterSpacing: '1px' }}>
+                Stall Count <span style={{ color: '#c5cfd8', fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}>(optional)</span>
+              </label>
+              <input
+                type="number" min="0" value={form.capacity} onChange={e => setForm(f => ({ ...f, capacity: e.target.value }))}
+                placeholder="0 = auto-detect" style={{
+                  border: '1.5px solid #e1e7ec', borderRadius: 10, padding: '10px 13px',
+                  fontSize: 14, fontWeight: 500, outline: 'none', color: '#0d1b2a', width: 140,
+                }}
+                onFocus={e => e.target.style.borderColor = '#10b981'}
+                onBlur={e => e.target.style.borderColor = '#e1e7ec'}
+              />
+            </div>
+
+            {addErr && <div style={{ color: '#ef4444', fontSize: 12.5, fontWeight: 600 }}>{addErr}</div>}
+
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 4 }}>
+              <button type="button" onClick={() => setShowAdd(false)} style={{
+                border: '1.5px solid #e1e7ec', background: 'transparent', color: '#6b7a8d',
+                borderRadius: 10, padding: '9px 18px', fontSize: 13, fontWeight: 600, cursor: 'pointer',
+              }}>Cancel</button>
+              <button type="submit" disabled={adding} style={{
+                border: 'none', cursor: adding ? 'not-allowed' : 'pointer',
+                background: adding ? '#a7f3d0' : 'linear-gradient(160deg,#10b981,#059669)',
+                color: '#fff', borderRadius: 10, padding: '9px 22px', fontSize: 13, fontWeight: 700,
+                boxShadow: adding ? 'none' : '0 4px 12px rgba(16,185,129,.3)',
+              }}>
+                {adding ? 'Creating…' : 'Create Lot'}
+              </button>
+            </div>
+
+            <div style={{ borderTop: '1px solid #f0f4f7', paddingTop: 14, fontSize: 11.5, color: '#a3adb8', lineHeight: 1.6 }}>
+              The lot will appear in the worker immediately. Stall layout is auto-detected from the stream
+              — or run <code style={{ background: '#f0f4f7', padding: '1px 5px', borderRadius: 4 }}>scripts/stall_vision.py --id &lt;id&gt;</code> for visual line detection.
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 }
