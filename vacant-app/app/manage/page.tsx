@@ -1,7 +1,8 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { createClient } from '@/lib/supabase/client';
 
 type Occ = {
   ts: number; id: string; name: string; inside: number | null;
@@ -9,49 +10,57 @@ type Occ = {
 };
 type Calib = { id: string; name: string; url: string; capacity: number; stalls?: unknown[] | null };
 
-const FONT = 'var(--font-geist-sans), system-ui, sans-serif';
-const GREEN = '#10b981'; const DARK = '#0d1b2a';
+const FONT  = 'var(--font-geist-sans), system-ui, sans-serif';
+const GREEN = '#10b981';
+const DARK  = '#0d1b2a';
+
+// ── tiny helpers ────────────────────────────────────────────────────────────
 
 function CopyBtn({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   return (
-    <button onClick={() => { navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1800); }}
-      style={{ border: 'none', background: copied ? '#d1fae5' : '#f0f4f6', color: copied ? '#047857' : '#6b7a8d', borderRadius: 7, padding: '4px 10px', fontSize: 11.5, fontWeight: 700, cursor: 'pointer' }}>
+    <button
+      onClick={() => { navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1800); }}
+      style={{ border: 'none', background: copied ? '#d1fae5' : '#f0f4f6', color: copied ? '#047857' : '#6b7a8d',
+        borderRadius: 7, padding: '4px 10px', fontSize: 11.5, fontWeight: 700, cursor: 'pointer' }}>
       {copied ? 'Copied!' : 'Copy'}
     </button>
   );
 }
 
+// ── lot card ─────────────────────────────────────────────────────────────────
+
 function LotCard({ calib, occ, onDelete, onRefresh }: {
   calib: Calib; occ: Occ | null; onDelete: () => void; onRefresh: () => void;
 }) {
-  const [editing,      setEditing]      = useState(false);
-  const [name,         setName]         = useState(calib.name);
-  const [url,          setUrl]          = useState(calib.url);
-  const [cap,          setCap]          = useState(String(calib.capacity || ''));
-  const [saving,       setSaving]       = useState(false);
-  const [deleting,     setDeleting]     = useState(false);
-  const [recal,        setRecal]        = useState(false);
-  const [recalDone,    setRecalDone]    = useState(false);
-  const [showImg,      setShowImg]      = useState(false);
+  const [editing,   setEditing]   = useState(false);
+  const [name,      setName]      = useState(calib.name);
+  const [url,       setUrl]       = useState(calib.url);
+  const [cap,       setCap]       = useState(String(calib.capacity || ''));
+  const [saving,    setSaving]    = useState(false);
+  const [deleting,  setDeleting]  = useState(false);
+  const [recal,     setRecal]     = useState(false);
+  const [recalDone, setRecalDone] = useState(false);
+  const [showImg,   setShowImg]   = useState(false);
 
-  const live        = occ && Date.now() - occ.ts < 15_000;
-  const hasStalls   = !!(occ?.stalls?.length || calib.stalls?.length);
-  const taken       = occ?.stalls ? occ.stalls.filter((s: any) => s.taken).length : (occ?.inside ?? null);
-  const cap2        = occ?.stalls?.length ?? occ?.capacity ?? calib.capacity ?? null;
-  const open        = cap2 != null && taken != null ? cap2 - taken : null;
+  const live      = occ && Date.now() - occ.ts < 15_000;
+  const hasStalls = !!(occ?.stalls?.length || calib.stalls?.length);
+  const taken     = occ?.stalls ? occ.stalls.filter((s: any) => s.taken).length : (occ?.inside ?? null);
+  const cap2      = occ?.stalls?.length ?? occ?.capacity ?? calib.capacity ?? null;
+  const open      = cap2 != null && taken != null ? cap2 - taken : null;
 
-  // health: stream online, AI sending data, stalls configured
   const health = [
-    { label: 'Stream',  ok: !!live    },
-    { label: 'AI',      ok: !!live    },
-    { label: 'Stalls',  ok: hasStalls },
+    { label: 'Stream', ok: !!live },
+    { label: 'AI',     ok: !!live },
+    { label: 'Stalls', ok: hasStalls },
   ];
 
   async function save() {
     setSaving(true);
-    await fetch('/api/lots', { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: calib.id, name, url, capacity: Number(cap) || 0 }) });
+    await fetch('/api/lots', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: calib.id, name, url, capacity: Number(cap) || 0 }),
+    });
     setSaving(false); setEditing(false); onRefresh();
   }
 
@@ -74,11 +83,11 @@ function LotCard({ calib, occ, onDelete, onRefresh }: {
     <div style={{ background: '#fff', borderRadius: 18, border: '1px solid #e7ecf0', overflow: 'hidden',
       boxShadow: '0 2px 14px rgba(13,27,42,.06)', display: 'flex', flexDirection: 'column' }}>
 
-      {/* camera thumbnail */}
+      {/* thumbnail */}
       <div onClick={() => occ?.image && setShowImg(true)} style={{
-        background: '#0d1b2a', aspectRatio: '16/9', display: 'flex', alignItems: 'center', justifyContent: 'center',
-        cursor: occ?.image ? 'zoom-in' : 'default', position: 'relative', overflow: 'hidden',
-      }}>
+        background: '#0d1b2a', aspectRatio: '16/9', display: 'flex', alignItems: 'center',
+        justifyContent: 'center', cursor: occ?.image ? 'zoom-in' : 'default',
+        position: 'relative', overflow: 'hidden' }}>
         {occ?.image
           ? <img src={occ.image} alt="feed" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
           : (
@@ -87,9 +96,8 @@ function LotCard({ calib, occ, onDelete, onRefresh }: {
               <div style={{ color: '#4a5568', fontSize: 12 }}>no feed yet</div>
             </div>
           )}
-
-        {/* top badges */}
-        <div style={{ position: 'absolute', top: 8, left: 8, right: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ position: 'absolute', top: 8, left: 8, right: 8,
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span style={{ padding: '3px 9px', borderRadius: 20, fontSize: 11, fontWeight: 700,
             background: live ? '#10b981' : '#374151', color: '#fff' }}>
             {live ? '● LIVE' : '○ OFFLINE'}
@@ -125,12 +133,12 @@ function LotCard({ calib, occ, onDelete, onRefresh }: {
               { label: 'Stall Count', val: cap,  set: setCap,  mono: false },
             ].map(({ label, val, set, mono }) => (
               <div key={label} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                <span style={{ fontSize: 10.5, fontWeight: 700, color: '#9aa6b2', textTransform: 'uppercase', letterSpacing: '1px' }}>{label}</span>
+                <span style={{ fontSize: 10.5, fontWeight: 700, color: '#9aa6b2',
+                  textTransform: 'uppercase', letterSpacing: '1px' }}>{label}</span>
                 <input value={val} onChange={e => set(e.target.value)} style={{
                   border: '1.5px solid #e1e7ec', borderRadius: 8, padding: '7px 10px',
                   fontSize: mono ? 12 : 13, fontFamily: mono ? 'monospace' : FONT,
-                  outline: 'none', color: DARK,
-                }} />
+                  outline: 'none', color: DARK }} />
               </div>
             ))}
             <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
@@ -156,7 +164,8 @@ function LotCard({ calib, occ, onDelete, onRefresh }: {
             </div>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#f7f9fb', borderRadius: 8, padding: '7px 10px' }}>
-              <span style={{ flex: 1, fontSize: 11.5, fontFamily: 'monospace', color: '#4a5568', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <span style={{ flex: 1, fontSize: 11.5, fontFamily: 'monospace', color: '#4a5568',
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {calib.url}
               </span>
               <CopyBtn text={calib.url} />
@@ -170,8 +179,13 @@ function LotCard({ calib, occ, onDelete, onRefresh }: {
             )}
 
             {!hasStalls && live && (
-              <div style={{ fontSize: 11.5, color: '#92400e', lineHeight: 1.55, background: '#fffbeb', borderRadius: 8, padding: '8px 10px', border: '1px solid #fde68a' }}>
-                No stall layout yet. <Link href="/setup" style={{ color: '#b45309', fontWeight: 700, textDecoration: 'none' }}>Map your stalls →</Link> or wait for auto-detection.
+              <div style={{ fontSize: 11.5, color: '#92400e', lineHeight: 1.55, background: '#fffbeb',
+                borderRadius: 8, padding: '8px 10px', border: '1px solid #fde68a' }}>
+                No stall layout yet.{' '}
+                <Link href={`/builder?id=${calib.id}&back=/manage`}
+                  style={{ color: '#b45309', fontWeight: 700, textDecoration: 'none' }}>
+                  Map stalls in builder →
+                </Link>
               </div>
             )}
 
@@ -181,11 +195,14 @@ function LotCard({ calib, occ, onDelete, onRefresh }: {
                 borderRadius: 8, padding: '7px', fontSize: 12, fontWeight: 600, cursor: 'pointer', minWidth: 60 }}>
                 Edit
               </button>
-              <button onClick={recalibrate} disabled={recal} title="Clear learned stall positions and re-detect from scratch" style={{
-                flex: 1, border: '1.5px solid #e1e7ec', background: recalDone ? '#f0fdf4' : 'transparent',
-                color: recalDone ? '#059669' : '#6b7a8d',
-                borderRadius: 8, padding: '7px', fontSize: 12, fontWeight: 600, cursor: recal ? 'wait' : 'pointer', minWidth: 60 }}>
-                {recal ? '…' : recalDone ? '✓ Reset' : '↺ Recalibrate'}
+              <button onClick={recalibrate} disabled={recal}
+                title="Clear learned stall positions and re-detect from scratch"
+                style={{ flex: 1, border: '1.5px solid #e1e7ec',
+                  background: recalDone ? '#f0fdf4' : 'transparent',
+                  color: recalDone ? '#059669' : '#6b7a8d',
+                  borderRadius: 8, padding: '7px', fontSize: 12, fontWeight: 600,
+                  cursor: recal ? 'wait' : 'pointer', minWidth: 60 }}>
+                {recal ? '…' : recalDone ? '✓ Reset' : '↺ Recal'}
               </button>
               <button onClick={del} disabled={deleting} style={{
                 flex: 1, border: '1.5px solid #fee2e2', background: '#fff5f5', color: '#dc2626',
@@ -208,16 +225,203 @@ function LotCard({ calib, occ, onDelete, onRefresh }: {
   );
 }
 
-const EMPTY = { name: '', url: '', capacity: '' };
+// ── quick-add side panel ──────────────────────────────────────────────────────
+
+const EMPTY_FORM = { name: '', url: '', capacity: '' };
+
+function QuickAddPanel({ open, onClose, onCreated }: {
+  open: boolean; onClose: () => void; onCreated: () => void;
+}) {
+  const router   = useRouter();
+  const [form,   setForm]   = useState(EMPTY_FORM);
+  const [adding, setAdding] = useState(false);
+  const [err,    setErr]    = useState<string | null>(null);
+  const [done,   setDone]   = useState<string | null>(null);
+  const nameRef  = useRef<HTMLInputElement>(null);
+
+  // focus name field when panel opens
+  useEffect(() => {
+    if (open) { setTimeout(() => nameRef.current?.focus(), 280); setDone(null); setErr(null); }
+  }, [open]);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setAdding(true); setErr(null);
+    try {
+      const r = await fetch('/api/lots', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: form.name, url: form.url, capacity: Number(form.capacity) || 0 }),
+      });
+      const j = await r.json();
+      if (!r.ok || j.error) throw new Error(j.error || 'failed');
+      setForm(EMPTY_FORM);
+      setDone(j.id);
+      onCreated();
+    } catch (e) { setErr(String(e)); }
+    finally { setAdding(false); }
+  }
+
+  const inp: React.CSSProperties = {
+    border: '1.5px solid #e1e7ec', borderRadius: 10, padding: '9px 12px', fontSize: 13,
+    outline: 'none', color: DARK, width: '100%', boxSizing: 'border-box', fontFamily: FONT,
+  };
+
+  return (
+    <>
+      {/* backdrop */}
+      <div
+        onClick={onClose}
+        style={{ position: 'fixed', inset: 0, background: 'rgba(13,27,42,.45)', zIndex: 98,
+          backdropFilter: 'blur(3px)', opacity: open ? 1 : 0,
+          pointerEvents: open ? 'auto' : 'none', transition: 'opacity .25s ease' }}
+      />
+
+      {/* panel */}
+      <div style={{
+        position: 'fixed', top: 0, right: 0, bottom: 0, width: 420,
+        background: '#fff', zIndex: 99, overflowY: 'auto',
+        boxShadow: '-10px 0 50px rgba(13,27,42,.18)',
+        transform: open ? 'translateX(0)' : 'translateX(100%)',
+        transition: 'transform .28s cubic-bezier(.25,.46,.45,.94)',
+        display: 'flex', flexDirection: 'column',
+      }}>
+
+        {/* panel header */}
+        <div style={{ padding: '22px 24px 0', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
+          <div>
+            <div style={{ fontWeight: 800, fontSize: 19, color: DARK, letterSpacing: '-.3px' }}>Quick Add Lot</div>
+            <div style={{ fontSize: 13, color: '#9aa6b2', marginTop: 3 }}>
+              For a guided walkthrough, use the setup wizard.
+            </div>
+          </div>
+          <button onClick={onClose} style={{ border: 'none', background: '#f0f4f6', color: '#6b7a8d',
+            width: 34, height: 34, borderRadius: '50%', cursor: 'pointer', fontSize: 16,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            ✕
+          </button>
+        </div>
+
+        {/* panel body */}
+        <div style={{ padding: '24px', flex: 1, display: 'flex', flexDirection: 'column', gap: 20 }}>
+
+          {done ? (
+            /* success state */
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16,
+              textAlign: 'center', paddingTop: 20 }}>
+              <div style={{ fontSize: 52 }}>✅</div>
+              <div style={{ fontWeight: 800, fontSize: 19, color: DARK }}>Lot created!</div>
+              <div style={{ fontSize: 13.5, color: '#6b7a8d', lineHeight: 1.6 }}>
+                Start streaming and run <code style={{ background: '#f0f4f6', padding: '2px 6px', borderRadius: 5 }}>push.py</code> to go live.
+              </div>
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'center' }}>
+                <button onClick={() => setDone(null)} style={{
+                  border: '1.5px solid #e1e7ec', background: '#fff', color: DARK,
+                  borderRadius: 10, padding: '10px 18px', fontSize: 13.5, fontWeight: 700, cursor: 'pointer' }}>
+                  Add another
+                </button>
+                <Link href={`/builder?id=${done}&back=/manage`}
+                  style={{ borderRadius: 10, padding: '10px 18px', fontSize: 13.5, fontWeight: 700,
+                    textDecoration: 'none', background: 'linear-gradient(160deg,#10b981,#059669)', color: '#fff',
+                    boxShadow: '0 3px 12px rgba(16,185,129,.3)' }}>
+                  Map layout →
+                </Link>
+              </div>
+            </div>
+          ) : (
+            <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                <label style={{ fontSize: 11, fontWeight: 700, color: '#9aa6b2',
+                  textTransform: 'uppercase', letterSpacing: '1px' }}>Lot name</label>
+                <input ref={nameRef} required value={form.name} placeholder="e.g. Main Street Lot"
+                  onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+                  style={inp} />
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                <label style={{ fontSize: 11, fontWeight: 700, color: '#9aa6b2',
+                  textTransform: 'uppercase', letterSpacing: '1px' }}>Stream URL</label>
+                <input required value={form.url} placeholder="rtsp://admin:pass@192.168.1.x:554/stream"
+                  onChange={e => setForm(f => ({ ...f, url: e.target.value }))}
+                  style={{ ...inp, fontFamily: 'monospace', fontSize: 12 }} />
+                <span style={{ fontSize: 11.5, color: '#9aa6b2' }}>
+                  RTSP for IP cameras · RTMP for phone streaming
+                </span>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                <label style={{ fontSize: 11, fontWeight: 700, color: '#9aa6b2',
+                  textTransform: 'uppercase', letterSpacing: '1px' }}>
+                  Stall count{' '}
+                  <span style={{ color: '#c5cfd8', textTransform: 'none', fontWeight: 500 }}>(0 = auto-detect)</span>
+                </label>
+                <input type="number" min="0" value={form.capacity} placeholder="0"
+                  onChange={e => setForm(f => ({ ...f, capacity: e.target.value }))}
+                  style={{ ...inp, width: 110 }} />
+              </div>
+
+              {err && (
+                <div style={{ background: '#fff5f5', border: '1px solid #fecaca', borderRadius: 9,
+                  padding: '10px 14px', fontSize: 13, color: '#dc2626', fontWeight: 600 }}>
+                  {err}
+                </div>
+              )}
+
+              <button type="submit" disabled={adding} style={{
+                border: 'none', borderRadius: 11, padding: '12px', fontWeight: 700, fontSize: 14,
+                cursor: adding ? 'not-allowed' : 'pointer',
+                background: adding ? '#a7f3d0' : 'linear-gradient(160deg,#10b981,#059669)',
+                color: '#fff', boxShadow: adding ? 'none' : '0 4px 14px rgba(16,185,129,.3)' }}>
+                {adding ? 'Creating…' : '+ Create Lot'}
+              </button>
+            </form>
+          )}
+        </div>
+
+        {/* panel footer — wizard CTA */}
+        <div style={{ padding: '16px 24px', borderTop: '1px solid #f0f4f7', flexShrink: 0 }}>
+          <div style={{ fontSize: 12.5, color: '#9aa6b2', marginBottom: 10, lineHeight: 1.5 }}>
+            Need help with camera setup, Cloudflare, or stall mapping?
+          </div>
+          <button onClick={() => { onClose(); router.push('/setup'); }} style={{
+            width: '100%', border: '1.5px solid #e1e7ec', background: '#fff', color: DARK,
+            borderRadius: 10, padding: '10px', fontSize: 13.5, fontWeight: 700, cursor: 'pointer',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+            Open setup wizard →
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ── page ──────────────────────────────────────────────────────────────────────
 
 export default function ManagePage() {
   const router = useRouter();
-  const [calibs, setCAlibs] = useState<Calib[]>([]);
-  const [occ, setOcc] = useState<Record<string, Occ>>({});
-  const [form, setForm] = useState(EMPTY);
-  const [adding, setAdding] = useState(false);
-  const [addErr, setAddErr] = useState<string | null>(null);
-  const [tunnel, setTunnel] = useState(false);
+  const [calibs,     setCAlibs]     = useState<Calib[]>([]);
+  const [occ,        setOcc]        = useState<Record<string, Occ>>({});
+  const [panelOpen,  setPanelOpen]  = useState(false);
+  const [tunnel,     setTunnel]     = useState(false);
+  const [userEmail,  setUserEmail]  = useState<string | null>(null);
+
+  // auth — only runs if Supabase env vars are configured
+  useEffect(() => {
+    if (!process.env.NEXT_PUBLIC_SUPABASE_URL) return;
+    const supabase = createClient();
+    supabase.auth.getUser().then(({ data }) => setUserEmail(data.user?.email ?? null));
+    const { data: sub } = supabase.auth.onAuthStateChange((_, session) => {
+      setUserEmail(session?.user?.email ?? null);
+    });
+    return () => sub.subscription.unsubscribe();
+  }, []);
+
+  async function signOut() {
+    const supabase = createClient();
+    await supabase.auth.signOut();
+    router.push('/login');
+    router.refresh();
+  }
 
   async function refresh() {
     const [c, o] = await Promise.all([
@@ -228,34 +432,28 @@ export default function ManagePage() {
     setOcc(o || {});
   }
 
-  useEffect(() => { refresh(); const id = setInterval(refresh, 4000); return () => clearInterval(id); }, []);
+  useEffect(() => {
+    refresh();
+    const id = setInterval(refresh, 4000);
+    return () => clearInterval(id);
+  }, []);
 
-  async function addLot(e: React.FormEvent) {
-    e.preventDefault(); setAdding(true); setAddErr(null);
-    try {
-      const r = await fetch('/api/lots', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: form.name, url: form.url, capacity: Number(form.capacity) || 0 }) });
-      const j = await r.json();
-      if (!r.ok || j.error) throw new Error(j.error || 'failed');
-      setForm(EMPTY); refresh();
-    } catch (err) { setAddErr(String(err)); }
-    finally { setAdding(false); }
-  }
-
-  const inp = (extra = {}) => ({
-    style: { border: '1.5px solid #e1e7ec', borderRadius: 10, padding: '9px 12px', fontSize: 13,
-      fontWeight: 500, outline: 'none', color: DARK, width: '100%', boxSizing: 'border-box' as const, ...extra },
-    onFocus: (e: any) => e.target.style.borderColor = GREEN,
-    onBlur:  (e: any) => e.target.style.borderColor = '#e1e7ec',
-  });
+  // close panel on Escape
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') setPanelOpen(false); };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
 
   return (
-    <div style={{ minHeight: '100vh', background: 'radial-gradient(900px 600px at 78% -8%, rgba(16,185,129,.12), transparent 60%), #eef3f1',
+    <div style={{ minHeight: '100vh',
+      background: 'radial-gradient(900px 600px at 78% -8%, rgba(16,185,129,.12), transparent 60%), #eef3f1',
       fontFamily: FONT, color: DARK }}>
 
       {/* header */}
-      <header style={{ padding: '16px 28px', background: '#fff', borderBottom: '1px solid #e7ecf0',
+      <header style={{ padding: '14px 28px', background: '#fff', borderBottom: '1px solid #e7ecf0',
         display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
+
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <Link href="/" style={{ textDecoration: 'none', fontWeight: 800, fontSize: 20, color: DARK, letterSpacing: '-.3px' }}>
             Vac<span style={{ color: GREEN }}>ant</span>
@@ -263,148 +461,156 @@ export default function ManagePage() {
           <span style={{ color: '#c5cfd8' }}>›</span>
           <span style={{ fontWeight: 700, fontSize: 16, color: '#4a5568' }}>Lot Manager</span>
         </div>
-        <div style={{ display: 'flex', gap: 10 }}>
-          {[{href:'/',label:'Dashboard'},{href:'/map',label:'Map'}].map(({href,label}) => (
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          {[{ href: '/', label: 'Dashboard' }, { href: '/map', label: 'Map' }].map(({ href, label }) => (
             <Link key={href} href={href} style={{ padding: '6px 14px', borderRadius: 9, background: '#f0f4f6',
-              color: '#0d1b2a', fontSize: 12.5, fontWeight: 700, textDecoration: 'none' }}>{label}</Link>
+              color: DARK, fontSize: 12.5, fontWeight: 700, textDecoration: 'none' }}>{label}</Link>
           ))}
+
+          {/* separator */}
+          <div style={{ width: 1, height: 20, background: '#e1e7ec' }} />
+
+          {/* quick-add panel trigger */}
+          <button onClick={() => setPanelOpen(true)} style={{
+            border: '1.5px solid #e1e7ec', background: '#fff', color: DARK,
+            borderRadius: 9, padding: '6px 14px', fontSize: 12.5, fontWeight: 700, cursor: 'pointer' }}>
+            + Quick add
+          </button>
+
+          {/* wizard button */}
+          <button onClick={() => router.push('/setup')} style={{
+            border: 'none', borderRadius: 9, padding: '7px 16px', fontSize: 12.5, fontWeight: 700,
+            background: 'linear-gradient(160deg,#10b981,#059669)', color: '#fff', cursor: 'pointer',
+            boxShadow: '0 3px 10px rgba(16,185,129,.28)' }}>
+            + Setup wizard
+          </button>
+
+          {/* user badge + sign out */}
+          {userEmail && (
+            <>
+              <div style={{ width: 1, height: 20, background: '#e1e7ec' }} />
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div style={{ background: '#f0fdf4', border: '1px solid #86efac',
+                  borderRadius: 20, padding: '4px 12px', fontSize: 12, fontWeight: 600, color: '#047857',
+                  maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {userEmail}
+                </div>
+                <button onClick={signOut} style={{
+                  border: '1.5px solid #e1e7ec', background: '#fff', color: '#6b7a8d',
+                  borderRadius: 9, padding: '5px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                  Sign out
+                </button>
+              </div>
+            </>
+          )}
         </div>
       </header>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 360px', gap: 28, padding: '28px', maxWidth: 1200, margin: '0 auto', alignItems: 'start' }}>
+      {/* main content */}
+      <div style={{ maxWidth: 1200, margin: '0 auto', padding: '28px' }}>
 
-        {/* left — lot cards */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
-            <div style={{ fontWeight: 800, fontSize: 20, letterSpacing: '-.3px' }}>
-              Your Lots <span style={{ fontSize: 14, color: '#9aa6b2', fontWeight: 600 }}>{calibs.length} configured</span>
-            </div>
+        {/* title row */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          flexWrap: 'wrap', gap: 12, marginBottom: 22 }}>
+          <div style={{ fontWeight: 800, fontSize: 22, letterSpacing: '-.3px' }}>
+            Your Lots{' '}
+            <span style={{ fontSize: 14, color: '#9aa6b2', fontWeight: 600 }}>
+              {calibs.length} configured
+            </span>
+          </div>
+          <div style={{ display: 'flex', gap: 10 }}>
+            <button onClick={() => setPanelOpen(true)} style={{
+              border: '1.5px solid #e1e7ec', background: '#fff', color: DARK,
+              borderRadius: 10, padding: '9px 18px', fontSize: 13, fontWeight: 700,
+              cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
+              + Quick add
+            </button>
             <button onClick={() => router.push('/setup')} style={{
               border: 'none', borderRadius: 10, padding: '9px 18px', fontSize: 13, fontWeight: 700,
               background: 'linear-gradient(160deg,#10b981,#059669)', color: '#fff', cursor: 'pointer',
-              boxShadow: '0 3px 10px rgba(16,185,129,.28)', display: 'flex', alignItems: 'center', gap: 6,
-            }}>
+              boxShadow: '0 3px 10px rgba(16,185,129,.28)', display: 'flex', alignItems: 'center', gap: 6 }}>
               + Set up new lot
             </button>
           </div>
+        </div>
 
-          {calibs.length === 0 && (
-            <div style={{ background: '#fff', borderRadius: 18, border: '2px dashed #c5cfd8', padding: '48px 24px', textAlign: 'center' }}>
-              <div style={{ fontSize: 40, marginBottom: 12 }}>🅿️</div>
-              <div style={{ fontWeight: 800, fontSize: 17, color: DARK, marginBottom: 6 }}>No parking lots yet</div>
-              <div style={{ color: '#9aa6b2', fontSize: 14, marginBottom: 20 }}>
-                Use the setup wizard to add your first lot in under 5 minutes.
-              </div>
+        {/* empty state */}
+        {calibs.length === 0 && (
+          <div style={{ background: '#fff', borderRadius: 18, border: '2px dashed #c5cfd8',
+            padding: '60px 24px', textAlign: 'center', marginBottom: 28 }}>
+            <div style={{ fontSize: 40, marginBottom: 12 }}>🅿️</div>
+            <div style={{ fontWeight: 800, fontSize: 18, color: DARK, marginBottom: 6 }}>No parking lots yet</div>
+            <div style={{ color: '#9aa6b2', fontSize: 14, marginBottom: 24 }}>
+              Use the guided wizard for step-by-step setup, or quick-add if you already have a stream URL.
+            </div>
+            <div style={{ display: 'flex', gap: 12, justifyContent: 'center', flexWrap: 'wrap' }}>
+              <button onClick={() => setPanelOpen(true)} style={{
+                border: '1.5px solid #e1e7ec', background: '#fff', color: DARK,
+                borderRadius: 12, padding: '11px 22px', fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>
+                Quick add
+              </button>
               <button onClick={() => router.push('/setup')} style={{
                 border: 'none', borderRadius: 12, padding: '12px 24px', fontSize: 14, fontWeight: 700,
                 background: 'linear-gradient(160deg,#10b981,#059669)', color: '#fff', cursor: 'pointer',
                 boxShadow: '0 4px 14px rgba(16,185,129,.3)' }}>
-                + Set up a parking lot →
+                Setup wizard →
               </button>
             </div>
-          )}
-
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 18 }}>
-            {calibs.map(c => (
-              <LotCard key={c.id} calib={c} occ={occ[c.id] ?? null} onDelete={refresh} onRefresh={refresh} />
-            ))}
           </div>
+        )}
 
-          {/* remote access section */}
-          <div style={{ background: '#fff', borderRadius: 16, border: '1px solid #e7ecf0', overflow: 'hidden', marginTop: 8 }}>
-            <button onClick={() => setTunnel(t => !t)} style={{
-              width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-              padding: '16px 20px', background: 'transparent', border: 'none', cursor: 'pointer',
-              fontFamily: FONT, fontWeight: 700, fontSize: 14, color: DARK }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <span style={{ fontSize: 18 }}>🌐</span>
-                Stream from anywhere — Cloudflare Tunnel setup
-              </div>
-              <span style={{ color: '#9aa6b2', fontSize: 18 }}>{tunnel ? '▲' : '▼'}</span>
-            </button>
-            {tunnel && (
-              <div style={{ padding: '0 20px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-                <p style={{ margin: 0, color: '#6b7a8d', fontSize: 13, lineHeight: 1.6 }}>
-                  By default, your stream only works on the same WiFi network.
-                  Cloudflare Tunnel gives you a public RTMP URL so you can stream from anywhere — your phone&apos;s cellular, a different network, etc. Free, no credit card.
-                </p>
-                {[
-                  { step: '1', title: 'Install cloudflared', cmd: 'brew install cloudflared' },
-                  { step: '2', title: 'Open a tunnel to your RTMP port', cmd: 'cloudflared tunnel --url tcp://localhost:1935' },
-                  { step: '3', title: 'Copy the public URL it prints', cmd: '# e.g. tcp://abc123.cfargotunnel.com:443\n# Use this as your stream host' },
-                ].map(({ step, title, cmd }) => (
-                  <div key={step} style={{ display: 'flex', gap: 12 }}>
-                    <div style={{ width: 26, height: 26, borderRadius: '50%', background: '#ecfdf5', color: '#059669',
-                      fontWeight: 800, fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                      {step}
-                    </div>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontWeight: 700, fontSize: 13, color: DARK, marginBottom: 6 }}>{title}</div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#f7f9fb', borderRadius: 8, padding: '8px 12px' }}>
-                        <code style={{ flex: 1, fontSize: 12, color: '#4a5568', whiteSpace: 'pre' }}>{cmd}</code>
-                        {!cmd.startsWith('#') && <CopyBtn text={cmd} />}
-                      </div>
+        {/* lot cards grid */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 20, marginBottom: 28 }}>
+          {calibs.map(c => (
+            <LotCard key={c.id} calib={c} occ={occ[c.id] ?? null} onDelete={refresh} onRefresh={refresh} />
+          ))}
+        </div>
+
+        {/* cloudflare collapse */}
+        <div style={{ background: '#fff', borderRadius: 16, border: '1px solid #e7ecf0', overflow: 'hidden' }}>
+          <button onClick={() => setTunnel(t => !t)} style={{
+            width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            padding: '16px 20px', background: 'transparent', border: 'none', cursor: 'pointer',
+            fontFamily: FONT, fontWeight: 700, fontSize: 14, color: DARK }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ fontSize: 18 }}>🌐</span>
+              Stream from anywhere — Cloudflare Tunnel setup
+            </div>
+            <span style={{ color: '#9aa6b2', fontSize: 18 }}>{tunnel ? '▲' : '▼'}</span>
+          </button>
+          {tunnel && (
+            <div style={{ padding: '0 20px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <p style={{ margin: 0, color: '#6b7a8d', fontSize: 13, lineHeight: 1.6 }}>
+                Cloudflare Tunnel gives you a public URL so you can access your dashboard or stream from anywhere —
+                no port forwarding or static IP required. Free, no credit card.
+              </p>
+              {[
+                { step: '1', title: 'Install cloudflared', cmd: 'brew install cloudflared' },
+                { step: '2', title: 'Open a tunnel to your dashboard', cmd: 'cloudflared tunnel --url http://localhost:3000' },
+                { step: '3', title: 'Optional: tunnel for remote phone streaming', cmd: 'cloudflared tunnel --url tcp://localhost:1935' },
+              ].map(({ step, title, cmd }) => (
+                <div key={step} style={{ display: 'flex', gap: 12 }}>
+                  <div style={{ width: 26, height: 26, borderRadius: '50%', background: '#ecfdf5', color: '#059669',
+                    fontWeight: 800, fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                    {step}
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 700, fontSize: 13, color: DARK, marginBottom: 6 }}>{title}</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#f7f9fb', borderRadius: 8, padding: '8px 12px' }}>
+                      <code style={{ flex: 1, fontSize: 12, color: '#4a5568', whiteSpace: 'pre' }}>{cmd}</code>
+                      <CopyBtn text={cmd} />
                     </div>
                   </div>
-                ))}
-                <div style={{ background: '#fffbeb', borderRadius: 10, padding: '12px 14px', border: '1px solid #fde68a' }}>
-                  <div style={{ fontWeight: 700, fontSize: 12.5, color: '#92400e', marginBottom: 4 }}>In Larix Broadcaster</div>
-                  <p style={{ margin: 0, fontSize: 12, color: '#78350f', lineHeight: 1.6 }}>
-                    Set the stream URL to:<br />
-                    <code>rtmp://&lt;your-tunnel-url&gt;/live/HWPARKING1</code><br />
-                    (replace <code>localhost:1935</code> with the Cloudflare host:port)
-                  </p>
                 </div>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* right — add form */}
-        <div style={{ position: 'sticky', top: 28 }}>
-          <form onSubmit={addLot} style={{ background: '#fff', borderRadius: 18, border: '1px solid #e7ecf0',
-            padding: '24px 22px', display: 'flex', flexDirection: 'column', gap: 16,
-            boxShadow: '0 4px 20px rgba(13,27,42,.07)' }}>
-            <div style={{ fontWeight: 800, fontSize: 17, letterSpacing: '-.3px' }}>Add Parking Lot</div>
-
-            {[
-              { label: 'Lot Name', key: 'name', placeholder: 'e.g. HWPARKING2', mono: false, required: true },
-              { label: 'Stream URL', key: 'url', placeholder: 'rtmp://… or rtsp://…', mono: true, required: true },
-            ].map(({ label, key, placeholder, mono, required }) => (
-              <div key={key} style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                <label style={{ fontSize: 11, fontWeight: 700, color: '#9aa6b2', textTransform: 'uppercase', letterSpacing: '1px' }}>{label}</label>
-                <input required={required} value={(form as any)[key]} placeholder={placeholder}
-                  onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}
-                  {...inp(mono ? { fontFamily: 'monospace', fontSize: 12 } : {})} />
-              </div>
-            ))}
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-              <label style={{ fontSize: 11, fontWeight: 700, color: '#9aa6b2', textTransform: 'uppercase', letterSpacing: '1px' }}>
-                Stall Count <span style={{ color: '#c5cfd8', textTransform: 'none' }}>(0 = auto-detect)</span>
-              </label>
-              <input type="number" min="0" value={form.capacity} placeholder="0"
-                onChange={e => setForm(f => ({ ...f, capacity: e.target.value }))}
-                {...inp()} style={{ ...inp().style, width: 120 }} />
+              ))}
             </div>
-
-            {addErr && <div style={{ fontSize: 12, color: '#ef4444', fontWeight: 600 }}>{addErr}</div>}
-
-            <button type="submit" disabled={adding} style={{
-              border: 'none', padding: '11px', borderRadius: 10, fontWeight: 700, fontSize: 14, cursor: 'pointer',
-              background: adding ? '#a7f3d0' : 'linear-gradient(160deg,#10b981,#059669)', color: '#fff',
-              boxShadow: adding ? 'none' : '0 4px 14px rgba(16,185,129,.3)' }}>
-              {adding ? 'Creating…' : '+ Create Lot'}
-            </button>
-
-            <div style={{ borderTop: '1px solid #f0f4f7', paddingTop: 14, fontSize: 11.5, color: '#a3adb8', lineHeight: 1.6 }}>
-              The lot appears in push.py immediately (no restart). Stall layout is auto-detected, or run{' '}
-              <code style={{ background: '#f0f4f6', padding: '1px 5px', borderRadius: 4 }}>stall_vision.py</code>{' '}
-              for visual line detection.
-            </div>
-          </form>
+          )}
         </div>
       </div>
+
+      {/* slide-in panel */}
+      <QuickAddPanel open={panelOpen} onClose={() => setPanelOpen(false)} onCreated={refresh} />
     </div>
   );
 }
