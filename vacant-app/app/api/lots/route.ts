@@ -74,17 +74,17 @@ export async function POST(request: Request) {
 export async function PATCH(request: Request) {
   try {
     const body = await request.json();
-    const { id, name, url, capacity, stalls, roads, _stall_draw_width, _stall_draw_height } = body;
+    const { id, name, url, capacity, stalls, roads, _stall_draw_width, _stall_draw_height, camera_brand } = body;
     if (!id) return Response.json({ error: 'id required' }, { status: 400 });
     const file = path.join(CALIB_DIR, `${id}.json`);
     if (!fs.existsSync(file)) return Response.json({ error: 'not found' }, { status: 404 });
     const calib = JSON.parse(fs.readFileSync(file, 'utf8'));
-    if (name     !== undefined) calib.name     = String(name).trim();
-    if (url      !== undefined) calib.url       = String(url).trim();
-    if (capacity !== undefined) calib.capacity  = Number(capacity) || 0;
-    if (stalls   !== undefined) calib.stalls    = stalls;  // null = auto-detect, array = user-drawn
-    if (roads    !== undefined) calib.roads     = roads;
-    // pixel size of detection image stalls were drawn on; push.py scales to actual frame
+    if (name         !== undefined) calib.name         = String(name).trim();
+    if (url          !== undefined) calib.url           = String(url).trim();
+    if (capacity     !== undefined) calib.capacity      = Number(capacity) || 0;
+    if (stalls       !== undefined) calib.stalls        = stalls;
+    if (roads        !== undefined) calib.roads         = roads;
+    if (camera_brand !== undefined) calib.camera_brand  = String(camera_brand);
     if (_stall_draw_width  !== undefined) calib._stall_draw_width  = Number(_stall_draw_width);
     if (_stall_draw_height !== undefined) calib._stall_draw_height = Number(_stall_draw_height);
     fs.writeFileSync(file, JSON.stringify(calib, null, 2));
