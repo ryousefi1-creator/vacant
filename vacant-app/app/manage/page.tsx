@@ -1,12 +1,13 @@
 'use client';
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 
 type Occ = {
   ts: number; id: string; name: string; inside: number | null;
   capacity: number | null; stalls: unknown[] | null; image: string | null;
 };
-type Calib = { id: string; name: string; url: string; capacity: number };
+type Calib = { id: string; name: string; url: string; capacity: number; stalls?: unknown[] | null };
 
 const FONT = 'var(--font-geist-sans), system-ui, sans-serif';
 const GREEN = '#10b981'; const DARK = '#0d1b2a';
@@ -21,25 +22,37 @@ function CopyBtn({ text }: { text: string }) {
   );
 }
 
-function LotCard({ calib, occ, onDelete }: { calib: Calib; occ: Occ | null; onDelete: () => void }) {
-  const [editing, setEditing] = useState(false);
-  const [name, setName] = useState(calib.name);
-  const [url, setUrl] = useState(calib.url);
-  const [cap, setCap] = useState(String(calib.capacity || ''));
-  const [saving, setSaving] = useState(false);
-  const [deleting, setDeleting] = useState(false);
-  const [showImg, setShowImg] = useState(false);
+function LotCard({ calib, occ, onDelete, onRefresh }: {
+  calib: Calib; occ: Occ | null; onDelete: () => void; onRefresh: () => void;
+}) {
+  const [editing,      setEditing]      = useState(false);
+  const [name,         setName]         = useState(calib.name);
+  const [url,          setUrl]          = useState(calib.url);
+  const [cap,          setCap]          = useState(String(calib.capacity || ''));
+  const [saving,       setSaving]       = useState(false);
+  const [deleting,     setDeleting]     = useState(false);
+  const [recal,        setRecal]        = useState(false);
+  const [recalDone,    setRecalDone]    = useState(false);
+  const [showImg,      setShowImg]      = useState(false);
 
-  const live = occ && Date.now() - occ.ts < 15_000;
-  const taken = occ?.stalls ? occ.stalls.filter((s: any) => s.taken).length : (occ?.inside ?? null);
-  const cap2 = occ?.stalls?.length ?? occ?.capacity ?? calib.capacity ?? null;
-  const open = cap2 != null && taken != null ? cap2 - taken : null;
+  const live        = occ && Date.now() - occ.ts < 15_000;
+  const hasStalls   = !!(occ?.stalls?.length || calib.stalls?.length);
+  const taken       = occ?.stalls ? occ.stalls.filter((s: any) => s.taken).length : (occ?.inside ?? null);
+  const cap2        = occ?.stalls?.length ?? occ?.capacity ?? calib.capacity ?? null;
+  const open        = cap2 != null && taken != null ? cap2 - taken : null;
+
+  // health: stream online, AI sending data, stalls configured
+  const health = [
+    { label: 'Stream',  ok: !!live    },
+    { label: 'AI',      ok: !!live    },
+    { label: 'Stalls',  ok: hasStalls },
+  ];
 
   async function save() {
     setSaving(true);
     await fetch('/api/lots', { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: calib.id, name, url, capacity: Number(cap) || 0 }) });
-    setSaving(false); setEditing(false);
+    setSaving(false); setEditing(false); onRefresh();
   }
 
   async function del() {
@@ -49,33 +62,67 @@ function LotCard({ calib, occ, onDelete }: { calib: Calib; occ: Occ | null; onDe
     onDelete();
   }
 
-  return (
-    <div style={{ background: '#fff', borderRadius: 16, border: '1px solid #e7ecf0', overflow: 'hidden',
-      boxShadow: '0 2px 12px rgba(13,27,42,.06)', display: 'flex', flexDirection: 'column' }}>
+  async function recalibrate() {
+    setRecal(true); setRecalDone(false);
+    await fetch(`/api/recalibrate?id=${calib.id}`, { method: 'POST' });
+    setRecal(false); setRecalDone(true);
+    setTimeout(() => setRecalDone(false), 3000);
+    onRefresh();
+  }
 
-      {/* camera thumbnail — click to enlarge */}
+  return (
+    <div style={{ background: '#fff', borderRadius: 18, border: '1px solid #e7ecf0', overflow: 'hidden',
+      boxShadow: '0 2px 14px rgba(13,27,42,.06)', display: 'flex', flexDirection: 'column' }}>
+
+      {/* camera thumbnail */}
       <div onClick={() => occ?.image && setShowImg(true)} style={{
         background: '#0d1b2a', aspectRatio: '16/9', display: 'flex', alignItems: 'center', justifyContent: 'center',
         cursor: occ?.image ? 'zoom-in' : 'default', position: 'relative', overflow: 'hidden',
       }}>
         {occ?.image
           ? <img src={occ.image} alt="feed" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-          : <span style={{ color: '#4a5568', fontSize: 12 }}>no feed yet</span>}
-        <div style={{ position: 'absolute', top: 8, right: 8, display: 'flex', gap: 6 }}>
+          : (
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ color: '#374151', fontSize: 28, marginBottom: 6 }}>📷</div>
+              <div style={{ color: '#4a5568', fontSize: 12 }}>no feed yet</div>
+            </div>
+          )}
+
+        {/* top badges */}
+        <div style={{ position: 'absolute', top: 8, left: 8, right: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span style={{ padding: '3px 9px', borderRadius: 20, fontSize: 11, fontWeight: 700,
             background: live ? '#10b981' : '#374151', color: '#fff' }}>
             {live ? '● LIVE' : '○ OFFLINE'}
           </span>
+          {open != null && (
+            <span style={{ padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 800,
+              background: 'rgba(0,0,0,.55)', color: open > 0 ? '#4ade80' : '#f87171' }}>
+              {open} open
+            </span>
+          )}
         </div>
       </div>
 
-      <div style={{ padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 10, flex: 1 }}>
+      {/* health bar */}
+      <div style={{ display: 'flex', borderBottom: '1px solid #f0f4f7' }}>
+        {health.map(({ label, ok }) => (
+          <div key={label} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            gap: 5, padding: '7px 0', fontSize: 11, fontWeight: 700,
+            color: ok ? '#059669' : '#9aa6b2',
+            borderRight: label !== 'Stalls' ? '1px solid #f0f4f7' : 'none',
+            background: ok ? '#f0fdf4' : 'transparent', transition: 'all .3s' }}>
+            <span>{ok ? '✓' : '○'}</span> {label}
+          </div>
+        ))}
+      </div>
+
+      <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10, flex: 1 }}>
         {editing ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {[
-              { label: 'Name', val: name, set: setName, mono: false },
-              { label: 'Stream URL', val: url, set: setUrl, mono: true },
-              { label: 'Stall Count', val: cap, set: setCap, mono: false },
+              { label: 'Name',        val: name, set: setName, mono: false },
+              { label: 'Stream URL',  val: url,  set: setUrl,  mono: true  },
+              { label: 'Stall Count', val: cap,  set: setCap,  mono: false },
             ].map(({ label, val, set, mono }) => (
               <div key={label} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
                 <span style={{ fontSize: 10.5, fontWeight: 700, color: '#9aa6b2', textTransform: 'uppercase', letterSpacing: '1px' }}>{label}</span>
@@ -103,15 +150,9 @@ function LotCard({ calib, occ, onDelete }: { calib: Calib; occ: Occ | null; onDe
           <>
             <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
               <div>
-                <div style={{ fontWeight: 800, fontSize: 16, color: DARK }}>{calib.name}</div>
+                <div style={{ fontWeight: 800, fontSize: 15.5, color: DARK }}>{calib.name}</div>
                 <div style={{ fontSize: 11, color: '#9aa6b2', fontFamily: 'monospace', marginTop: 2 }}>{calib.id}</div>
               </div>
-              {open != null && (
-                <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                  <div style={{ fontSize: 26, fontWeight: 800, color: open > 0 ? GREEN : '#ef4444', lineHeight: 1 }}>{open}</div>
-                  <div style={{ fontSize: 10.5, color: '#9aa6b2', fontWeight: 600 }}>of {cap2} open</div>
-                </div>
-              )}
             </div>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#f7f9fb', borderRadius: 8, padding: '7px 10px' }}>
@@ -122,20 +163,33 @@ function LotCard({ calib, occ, onDelete }: { calib: Calib; occ: Occ | null; onDe
             </div>
 
             {!live && (
-              <div style={{ fontSize: 11.5, color: '#9aa6b2', lineHeight: 1.5 }}>
-                Not receiving data — make sure <code style={{ background: '#f0f4f6', padding: '1px 5px', borderRadius: 4 }}>push.py</code> is running and the stream is active.
+              <div style={{ fontSize: 11.5, color: '#9aa6b2', lineHeight: 1.55, background: '#f7f9fb', borderRadius: 8, padding: '8px 10px' }}>
+                Offline — start streaming and run <code style={{ background: '#e8edf1', padding: '1px 4px', borderRadius: 4 }}>push.py</code> to go live.
+                {' '}<Link href="/setup" style={{ color: GREEN, fontWeight: 700, textDecoration: 'none' }}>Setup guide →</Link>
               </div>
             )}
 
-            <div style={{ display: 'flex', gap: 8, marginTop: 'auto', paddingTop: 4 }}>
+            {!hasStalls && live && (
+              <div style={{ fontSize: 11.5, color: '#92400e', lineHeight: 1.55, background: '#fffbeb', borderRadius: 8, padding: '8px 10px', border: '1px solid #fde68a' }}>
+                No stall layout yet. <Link href="/setup" style={{ color: '#b45309', fontWeight: 700, textDecoration: 'none' }}>Map your stalls →</Link> or wait for auto-detection.
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: 6, marginTop: 'auto', paddingTop: 2, flexWrap: 'wrap' }}>
               <button onClick={() => setEditing(true)} style={{
-                flex: 1, border: '1.5px solid #e1e7ec', background: 'transparent', color: '#0d1b2a',
-                borderRadius: 8, padding: '7px', fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}>
+                flex: 1, border: '1.5px solid #e1e7ec', background: 'transparent', color: DARK,
+                borderRadius: 8, padding: '7px', fontSize: 12, fontWeight: 600, cursor: 'pointer', minWidth: 60 }}>
                 Edit
+              </button>
+              <button onClick={recalibrate} disabled={recal} title="Clear learned stall positions and re-detect from scratch" style={{
+                flex: 1, border: '1.5px solid #e1e7ec', background: recalDone ? '#f0fdf4' : 'transparent',
+                color: recalDone ? '#059669' : '#6b7a8d',
+                borderRadius: 8, padding: '7px', fontSize: 12, fontWeight: 600, cursor: recal ? 'wait' : 'pointer', minWidth: 60 }}>
+                {recal ? '…' : recalDone ? '✓ Reset' : '↺ Recalibrate'}
               </button>
               <button onClick={del} disabled={deleting} style={{
                 flex: 1, border: '1.5px solid #fee2e2', background: '#fff5f5', color: '#dc2626',
-                borderRadius: 8, padding: '7px', fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}>
+                borderRadius: 8, padding: '7px', fontSize: 12, fontWeight: 600, cursor: 'pointer', minWidth: 60 }}>
                 {deleting ? '…' : 'Delete'}
               </button>
             </div>
@@ -143,7 +197,6 @@ function LotCard({ calib, occ, onDelete }: { calib: Calib; occ: Occ | null; onDe
         )}
       </div>
 
-      {/* full-screen image overlay */}
       {showImg && occ?.image && (
         <div onClick={() => setShowImg(false)} style={{
           position: 'fixed', inset: 0, background: 'rgba(0,0,0,.85)', zIndex: 200,
@@ -158,6 +211,7 @@ function LotCard({ calib, occ, onDelete }: { calib: Calib; occ: Occ | null; onDe
 const EMPTY = { name: '', url: '', capacity: '' };
 
 export default function ManagePage() {
+  const router = useRouter();
   const [calibs, setCAlibs] = useState<Calib[]>([]);
   const [occ, setOcc] = useState<Record<string, Occ>>({});
   const [form, setForm] = useState(EMPTY);
@@ -221,19 +275,38 @@ export default function ManagePage() {
 
         {/* left — lot cards */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-          <div style={{ fontWeight: 800, fontSize: 20, letterSpacing: '-.3px' }}>
-            Your Lots <span style={{ fontSize: 14, color: '#9aa6b2', fontWeight: 600 }}>{calibs.length} configured</span>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+            <div style={{ fontWeight: 800, fontSize: 20, letterSpacing: '-.3px' }}>
+              Your Lots <span style={{ fontSize: 14, color: '#9aa6b2', fontWeight: 600 }}>{calibs.length} configured</span>
+            </div>
+            <button onClick={() => router.push('/setup')} style={{
+              border: 'none', borderRadius: 10, padding: '9px 18px', fontSize: 13, fontWeight: 700,
+              background: 'linear-gradient(160deg,#10b981,#059669)', color: '#fff', cursor: 'pointer',
+              boxShadow: '0 3px 10px rgba(16,185,129,.28)', display: 'flex', alignItems: 'center', gap: 6,
+            }}>
+              + Set up new lot
+            </button>
           </div>
 
           {calibs.length === 0 && (
-            <div style={{ background: '#fff', borderRadius: 16, border: '1px solid #e7ecf0', padding: '40px 24px', textAlign: 'center', color: '#9aa6b2', fontSize: 14 }}>
-              No lots yet — add one using the form →
+            <div style={{ background: '#fff', borderRadius: 18, border: '2px dashed #c5cfd8', padding: '48px 24px', textAlign: 'center' }}>
+              <div style={{ fontSize: 40, marginBottom: 12 }}>🅿️</div>
+              <div style={{ fontWeight: 800, fontSize: 17, color: DARK, marginBottom: 6 }}>No parking lots yet</div>
+              <div style={{ color: '#9aa6b2', fontSize: 14, marginBottom: 20 }}>
+                Use the setup wizard to add your first lot in under 5 minutes.
+              </div>
+              <button onClick={() => router.push('/setup')} style={{
+                border: 'none', borderRadius: 12, padding: '12px 24px', fontSize: 14, fontWeight: 700,
+                background: 'linear-gradient(160deg,#10b981,#059669)', color: '#fff', cursor: 'pointer',
+                boxShadow: '0 4px 14px rgba(16,185,129,.3)' }}>
+                + Set up a parking lot →
+              </button>
             </div>
           )}
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 18 }}>
             {calibs.map(c => (
-              <LotCard key={c.id} calib={c} occ={occ[c.id] ?? null} onDelete={refresh} />
+              <LotCard key={c.id} calib={c} occ={occ[c.id] ?? null} onDelete={refresh} onRefresh={refresh} />
             ))}
           </div>
 
