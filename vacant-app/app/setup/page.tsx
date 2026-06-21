@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
+import { Suspense } from 'react';
 
 const GREEN = '#10b981';
 const DARK  = '#0d1b2a';
@@ -386,7 +387,7 @@ const STEPS = [
   'Done!',
 ];
 
-export default function SetupPage() {
+function SetupWizard() {
   const [step,      setStep]      = useState(0);
   const [lot,       setLot]       = useState<LotData | null>(null);
   const [occ,       setOcc]       = useState<OccData | null>(null);
@@ -398,8 +399,17 @@ export default function SetupPage() {
   const [urlSaving, setUrlSaving] = useState(false);
   const [cameraErr, setCameraErr] = useState<string | null>(null);
   const [hoveredBrand, setHoveredBrand] = useState<string | null>(null);
-  const [cam, setCam] = useState<CamState>({
-    brandId: '', ip: '', port: '554', user: 'admin', pass: '', useCustom: false, customUrl: '',
+  const [cam, setCam] = useState<CamState>(() => {
+    const initBrandId = typeof window !== 'undefined'
+      ? new URLSearchParams(window.location.search).get('brand') ?? ''
+      : '';
+    const initBrand = BRANDS.find(b => b.id === initBrandId);
+    return {
+      brandId: initBrand ? initBrandId : '',
+      ip: '', port: initBrand?.defaultPort ?? '554',
+      user: initBrand?.defaultUser ?? 'admin',
+      pass: '', useCustom: false, customUrl: '',
+    };
   });
 
   const pollRef   = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -979,5 +989,18 @@ export default function SetupPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function SetupPage() {
+  return (
+    <Suspense fallback={
+      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: '#eef3f1', fontFamily: 'system-ui', fontSize: 14, color: '#6b7a8d' }}>
+        Loading…
+      </div>
+    }>
+      <SetupWizard />
+    </Suspense>
   );
 }

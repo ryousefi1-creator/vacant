@@ -54,8 +54,8 @@ AUTO_STALL_FRAMES = 6  # frames of detections needed before auto-deriving stall 
 # frames before we call it taken; consistently empty for EMPTY_THRESH frames
 # before we call it open.  EMPTY_THRESH is intentionally higher because a parked
 # car rarely disappears — a miss is almost always a detection failure.
-OCCUPY_THRESH = 2   # frames of occupied before flipping to taken
-EMPTY_THRESH  = 4   # frames of empty before flipping to open
+OCCUPY_THRESH = 3   # frames of occupied before flipping to taken
+EMPTY_THRESH  = 7   # frames of empty before flipping to open (higher: a parked car rarely vanishes)
 
 class StallDebouncer:
     """Per-lot temporal debouncer for stall occupancy states."""
@@ -171,6 +171,11 @@ def fetch(url):
     return cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
 
 
+def _filter_small_detections(xy, min_area_px: int) -> list:
+    """Drop bounding boxes smaller than min_area_px (e.g. shadow artifacts, distant tiny blobs)."""
+    return [b for b in xy if (b[2] - b[0]) * (b[3] - b[1]) >= min_area_px]
+
+
 def detect_lot(model, frame, calib, conf, lot_imgsz, tile_imgsz, tile_grid, device):
     """Detect vehicles for a LOT.
 
@@ -178,26 +183,34 @@ def detect_lot(model, frame, calib, conf, lot_imgsz, tile_imgsz, tile_grid, devi
       "imgsz"         int   inference resolution (default: lot_imgsz CLI arg)
       "iou"           float YOLO NMS IoU threshold; lower = keep more adjacent boxes
                             (0.3 for close carport cars, 0.7 default merges them)
+      "conf"          float confidence threshold (default: CLI --conf); raise per-lot to
+                            reduce false positives (e.g. 0.35 for a well-lit daytime lot)
+      "min_area_px"   int   drop detections whose bbox pixel area is below this value;
+                            filters shadow-pass and tiny distant blobs (default: 600)
       "clahe"         bool  CLAHE contrast enhancement before inference; helps in
                             shadowed carport/garage conditions
       "detect_topdown" bool warp the lot region to bird's-eye before running YOLO
                             (fixes perspective compression; requires a calibrated lot_quad)
       "tile"          bool  SAHI tile grid for wide lots with small far cars
     """
-    iou_thr = float(calib.get('iou', 0.45))
-    imgsz_c = int(calib.get('imgsz', lot_imgsz))
+    iou_thr  = float(calib.get('iou', 0.45))
+    imgsz_c  = int(calib.get('imgsz', lot_imgsz))
+    conf_eff = float(calib.get('conf', conf))       # per-calib confidence override
 
     if calib.get('clahe'):
         frame = spatial.clahe_enhance(frame)
 
     if calib.get('detect_topdown') and calib.get('lot_quad') and calib.get('map_size'):
-        return spatial.detect_topdown(model, frame, calib, conf, imgsz_c, device, iou_thr)
+        xy = spatial.detect_topdown(model, frame, calib, conf_eff, imgsz_c, device, iou_thr)
+    elif calib.get('tile'):
+        xy = spatial.detect_tiled(model, frame, conf_eff, int(calib.get('tile_imgsz', tile_imgsz)),
+                                   device, grid=int(calib.get('tile_grid', tile_grid)),
+                                   full_imgsz=imgsz_c, iou_thr=iou_thr)
+    else:
+        xy = spatial.detect(model, frame, conf_eff, imgsz_c, device, iou_thr)
 
-    if calib.get('tile'):
-        return spatial.detect_tiled(model, frame, conf, int(calib.get('tile_imgsz', tile_imgsz)),
-                                    device, grid=int(calib.get('tile_grid', tile_grid)),
-                                    full_imgsz=imgsz_c, iou_thr=iou_thr)
-    return spatial.detect(model, frame, conf, imgsz_c, device, iou_thr)
+    min_area = int(calib.get('min_area_px', 600))
+    return _filter_small_detections(xy, min_area)
 
 
 def to_data_uri(viz, width=800):

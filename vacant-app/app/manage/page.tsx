@@ -227,22 +227,111 @@ function LotCard({ calib, occ, onDelete, onRefresh }: {
 
 // ── quick-add side panel ──────────────────────────────────────────────────────
 
+type MBrand = {
+  id: string; name: string; emoji: string;
+  buildUrl: (ip: string, user: string, pass: string) => string;
+  defaultUser: string;
+  needsIp: boolean;
+};
+
+const MINI_BRANDS: MBrand[] = [
+  { id: 'reolink',   name: 'Reolink',   emoji: '🟠', defaultUser: 'admin',
+    needsIp: true,
+    buildUrl: (ip, u, p) => `rtsp://${u}:${p}@${ip}:554/h264Preview_01_main` },
+  { id: 'hikvision', name: 'Hikvision', emoji: '🔵', defaultUser: 'admin',
+    needsIp: true,
+    buildUrl: (ip, u, p) => `rtsp://${u}:${p}@${ip}:554/Streaming/Channels/101` },
+  { id: 'dahua',     name: 'Dahua',     emoji: '🟢', defaultUser: 'admin',
+    needsIp: true,
+    buildUrl: (ip, u, p) => `rtsp://${u}:${p}@${ip}:554/cam/realmonitor?channel=1&subtype=0` },
+  { id: 'amcrest',   name: 'Amcrest',   emoji: '🟡', defaultUser: 'admin',
+    needsIp: true,
+    buildUrl: (ip, u, p) => `rtsp://${u}:${p}@${ip}:554/cam/realmonitor?channel=1&subtype=0` },
+  { id: 'axis',      name: 'Axis',      emoji: '⬛', defaultUser: 'root',
+    needsIp: true,
+    buildUrl: (ip, u, p) => `rtsp://${u}:${p}@${ip}:554/axis-media/media.amp` },
+  { id: 'phone',     name: 'Phone',     emoji: '📱', defaultUser: '',
+    needsIp: false,
+    buildUrl: () => 'rtmp://localhost:1935/live/lot' },
+  { id: 'custom',    name: 'Custom',    emoji: '🔧', defaultUser: '',
+    needsIp: false,
+    buildUrl: () => '' },
+];
+
 const EMPTY_FORM = { name: '', url: '', capacity: '' };
 
 function QuickAddPanel({ open, onClose, onCreated }: {
   open: boolean; onClose: () => void; onCreated: () => void;
 }) {
   const router   = useRouter();
-  const [form,   setForm]   = useState(EMPTY_FORM);
-  const [adding, setAdding] = useState(false);
-  const [err,    setErr]    = useState<string | null>(null);
-  const [done,   setDone]   = useState<string | null>(null);
+  const [form,   setForm]    = useState(EMPTY_FORM);
+  const [adding, setAdding]  = useState(false);
+  const [err,    setErr]     = useState<string | null>(null);
+  const [done,   setDone]    = useState<string | null>(null);
   const nameRef  = useRef<HTMLInputElement>(null);
 
-  // focus name field when panel opens
+  // camera quick-connect state
+  const [brand,    setBrand]    = useState<MBrand | null>(null);
+  const [camIp,    setCamIp]    = useState('');
+  const [camUser,  setCamUser]  = useState('admin');
+  const [camPass,  setCamPass]  = useState('');
+  const [showPass, setShowPass] = useState(false);
+  const [testing,  setTesting]  = useState(false);
+  const [testRes,  setTestRes]  = useState<{ ok: boolean; frame?: boolean; width?: number; height?: number; error?: string } | null>(null);
+  const [scanning, setScanning] = useState(false);
+  const [foundIps, setFoundIps] = useState<string[]>([]);
+
   useEffect(() => {
-    if (open) { setTimeout(() => nameRef.current?.focus(), 280); setDone(null); setErr(null); }
+    if (open) {
+      setTimeout(() => nameRef.current?.focus(), 280);
+      setDone(null); setErr(null);
+    } else {
+      setBrand(null); setCamIp(''); setCamUser('admin'); setCamPass('');
+      setTestRes(null); setFoundIps([]);
+    }
   }, [open]);
+
+  // auto-build URL when brand / IP / creds change
+  useEffect(() => {
+    if (!brand || !brand.needsIp) return;
+    if (!camIp) return;
+    setForm(f => ({ ...f, url: brand.buildUrl(camIp, camUser, camPass) }));
+  }, [brand, camIp, camUser, camPass]);
+
+  function selectBrand(b: MBrand) {
+    setBrand(b);
+    setCamUser(b.defaultUser);
+    setTestRes(null);
+    if (!b.needsIp) {
+      setForm(f => ({ ...f, url: b.buildUrl('', b.defaultUser, '') }));
+    } else {
+      setForm(f => ({ ...f, url: '' }));
+    }
+  }
+
+  async function scanNetwork() {
+    setScanning(true); setFoundIps([]);
+    try {
+      const r = await fetch('/api/discover');
+      const j = await r.json();
+      setFoundIps(j.found ?? []);
+    } catch { setFoundIps([]); }
+    finally { setScanning(false); }
+  }
+
+  async function testConnection() {
+    if (!form.url) return;
+    setTesting(true); setTestRes(null);
+    try {
+      const r = await fetch('/api/camera-test', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: form.url }),
+      });
+      const j = await r.json();
+      setTestRes(j);
+    } catch { setTestRes({ ok: false, error: 'request failed' }); }
+    finally { setTesting(false); }
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -250,7 +339,10 @@ function QuickAddPanel({ open, onClose, onCreated }: {
     try {
       const r = await fetch('/api/lots', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: form.name, url: form.url, capacity: Number(form.capacity) || 0 }),
+        body: JSON.stringify({
+          name: form.name, url: form.url, capacity: Number(form.capacity) || 0,
+          ...(brand && brand.id !== 'custom' ? { camera_brand: brand.id } : {}),
+        }),
       });
       const j = await r.json();
       if (!r.ok || j.error) throw new Error(j.error || 'failed');
@@ -278,7 +370,7 @@ function QuickAddPanel({ open, onClose, onCreated }: {
 
       {/* panel */}
       <div style={{
-        position: 'fixed', top: 0, right: 0, bottom: 0, width: 420,
+        position: 'fixed', top: 0, right: 0, bottom: 0, width: 440,
         background: '#fff', zIndex: 99, overflowY: 'auto',
         boxShadow: '-10px 0 50px rgba(13,27,42,.18)',
         transform: open ? 'translateX(0)' : 'translateX(100%)',
@@ -291,7 +383,7 @@ function QuickAddPanel({ open, onClose, onCreated }: {
           <div>
             <div style={{ fontWeight: 800, fontSize: 19, color: DARK, letterSpacing: '-.3px' }}>Quick Add Lot</div>
             <div style={{ fontSize: 13, color: '#9aa6b2', marginTop: 3 }}>
-              For a guided walkthrough, use the setup wizard.
+              {brand ? `${brand.emoji} ${brand.name} — edit URL if needed` : 'Pick a camera brand or paste a URL directly.'}
             </div>
           </div>
           <button onClick={onClose} style={{ border: 'none', background: '#f0f4f6', color: '#6b7a8d',
@@ -302,7 +394,7 @@ function QuickAddPanel({ open, onClose, onCreated }: {
         </div>
 
         {/* panel body */}
-        <div style={{ padding: '24px', flex: 1, display: 'flex', flexDirection: 'column', gap: 20 }}>
+        <div style={{ padding: '20px 24px', flex: 1, display: 'flex', flexDirection: 'column', gap: 18 }}>
 
           {done ? (
             /* success state */
@@ -314,7 +406,7 @@ function QuickAddPanel({ open, onClose, onCreated }: {
                 Start streaming and run <code style={{ background: '#f0f4f6', padding: '2px 6px', borderRadius: 5 }}>push.py</code> to go live.
               </div>
               <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'center' }}>
-                <button onClick={() => setDone(null)} style={{
+                <button onClick={() => { setDone(null); setBrand(null); setForm(EMPTY_FORM); }} style={{
                   border: '1.5px solid #e1e7ec', background: '#fff', color: DARK,
                   borderRadius: 10, padding: '10px 18px', fontSize: 13.5, fontWeight: 700, cursor: 'pointer' }}>
                   Add another
@@ -328,8 +420,9 @@ function QuickAddPanel({ open, onClose, onCreated }: {
               </div>
             </div>
           ) : (
-            <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+            <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
 
+              {/* lot name */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
                 <label style={{ fontSize: 11, fontWeight: 700, color: '#9aa6b2',
                   textTransform: 'uppercase', letterSpacing: '1px' }}>Lot name</label>
@@ -338,17 +431,148 @@ function QuickAddPanel({ open, onClose, onCreated }: {
                   style={inp} />
               </div>
 
+              {/* brand picker */}
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                  <label style={{ fontSize: 11, fontWeight: 700, color: '#9aa6b2',
+                    textTransform: 'uppercase', letterSpacing: '1px' }}>Camera brand</label>
+                  {brand && (
+                    <button type="button" onClick={() => { setBrand(null); setForm(f => ({ ...f, url: '' })); setCamIp(''); }}
+                      style={{ border: 'none', background: 'none', color: '#9aa6b2', fontSize: 11.5,
+                        fontWeight: 700, cursor: 'pointer', padding: 0 }}>
+                      Clear
+                    </button>
+                  )}
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6 }}>
+                  {MINI_BRANDS.map(b => (
+                    <button key={b.id} type="button" onClick={() => selectBrand(b)} style={{
+                      border: brand?.id === b.id ? `2px solid ${GREEN}` : '1.5px solid #e1e7ec',
+                      background: brand?.id === b.id ? '#ecfdf5' : '#fafbfc',
+                      borderRadius: 10, padding: '8px 4px', fontSize: 11, fontWeight: 700,
+                      color: brand?.id === b.id ? '#047857' : '#4a5568',
+                      cursor: 'pointer', display: 'flex', flexDirection: 'column',
+                      alignItems: 'center', gap: 3,
+                    }}>
+                      <span style={{ fontSize: 18 }}>{b.emoji}</span>
+                      <span>{b.name}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* IP + creds (shown when a brand with needsIp is selected) */}
+              {brand?.needsIp && (
+                <div style={{ background: '#f7f9fb', borderRadius: 12, padding: '14px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: '#4a5568' }}>Camera IP address</span>
+                    <button type="button" onClick={scanNetwork} disabled={scanning}
+                      style={{ border: '1.5px solid #e1e7ec', background: '#fff', color: '#4a5568',
+                        borderRadius: 8, padding: '4px 11px', fontSize: 11.5, fontWeight: 700,
+                        cursor: scanning ? 'wait' : 'pointer' }}>
+                      {scanning ? '⏳ Scanning…' : '🔍 Scan network'}
+                    </button>
+                  </div>
+
+                  {foundIps.length > 0 && (
+                    <div style={{ marginBottom: 10, display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                      {foundIps.map(ip => (
+                        <button key={ip} type="button" onClick={() => setCamIp(ip)} style={{
+                          border: camIp === ip ? `2px solid ${GREEN}` : '1.5px solid #c5cfd8',
+                          background: camIp === ip ? '#ecfdf5' : '#fff',
+                          color: camIp === ip ? '#047857' : '#374151',
+                          borderRadius: 8, padding: '4px 10px', fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                          fontFamily: 'monospace',
+                        }}>
+                          {ip}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {foundIps.length === 0 && !scanning && (
+                    <input
+                      value={camIp}
+                      onChange={e => setCamIp(e.target.value)}
+                      placeholder="192.168.1.x"
+                      style={{ ...inp, fontFamily: 'monospace', marginBottom: 8 }}
+                    />
+                  )}
+
+                  {foundIps.length > 0 && (
+                    <input
+                      value={camIp}
+                      onChange={e => setCamIp(e.target.value)}
+                      placeholder="or type IP manually"
+                      style={{ ...inp, fontFamily: 'monospace', marginBottom: 8 }}
+                    />
+                  )}
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                    <div>
+                      <label style={{ fontSize: 10.5, fontWeight: 700, color: '#9aa6b2', display: 'block', marginBottom: 3 }}>Username</label>
+                      <input value={camUser} onChange={e => setCamUser(e.target.value)}
+                        style={{ ...inp, padding: '7px 10px' }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 10.5, fontWeight: 700, color: '#9aa6b2', display: 'block', marginBottom: 3 }}>Password</label>
+                      <div style={{ position: 'relative' }}>
+                        <input
+                          type={showPass ? 'text' : 'password'}
+                          value={camPass}
+                          onChange={e => setCamPass(e.target.value)}
+                          placeholder="••••••"
+                          style={{ ...inp, padding: '7px 32px 7px 10px' }}
+                        />
+                        <button type="button" onClick={() => setShowPass(v => !v)}
+                          style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)',
+                            border: 'none', background: 'none', cursor: 'pointer', color: '#9aa6b2', fontSize: 13 }}>
+                          {showPass ? '🙈' : '👁'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* stream URL */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                <label style={{ fontSize: 11, fontWeight: 700, color: '#9aa6b2',
-                  textTransform: 'uppercase', letterSpacing: '1px' }}>Stream URL</label>
-                <input required value={form.url} placeholder="rtsp://admin:pass@192.168.1.x:554/stream"
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <label style={{ fontSize: 11, fontWeight: 700, color: '#9aa6b2',
+                    textTransform: 'uppercase', letterSpacing: '1px' }}>Stream URL</label>
+                  {form.url && (
+                    <button type="button" onClick={testConnection} disabled={testing || !form.url}
+                      style={{ border: '1.5px solid #e1e7ec', background: testing ? '#f0fdf4' : '#fff',
+                        color: testing ? '#047857' : '#4a5568', borderRadius: 8, padding: '3px 10px',
+                        fontSize: 11.5, fontWeight: 700, cursor: testing ? 'wait' : 'pointer' }}>
+                      {testing ? '⏳ Testing…' : '▷ Test'}
+                    </button>
+                  )}
+                </div>
+                <input required value={form.url}
+                  placeholder={brand?.id === 'phone' ? 'rtmp://localhost:1935/live/lot' : 'rtsp://admin:pass@192.168.1.x:554/stream'}
                   onChange={e => setForm(f => ({ ...f, url: e.target.value }))}
                   style={{ ...inp, fontFamily: 'monospace', fontSize: 12 }} />
+
+                {testRes && (
+                  <div style={{
+                    padding: '8px 12px', borderRadius: 9, fontSize: 12.5, fontWeight: 600,
+                    background: testRes.ok ? '#f0fdf4' : '#fff5f5',
+                    border: `1px solid ${testRes.ok ? '#86efac' : '#fecaca'}`,
+                    color: testRes.ok ? '#047857' : '#dc2626',
+                  }}>
+                    {testRes.ok
+                      ? `✓ Connected${testRes.frame ? ` — got a frame (${testRes.width}×${testRes.height})` : ''}`
+                      : `✗ ${testRes.error ?? 'Could not connect'}`}
+                  </div>
+                )}
+
                 <span style={{ fontSize: 11.5, color: '#9aa6b2' }}>
                   RTSP for IP cameras · RTMP for phone streaming
                 </span>
               </div>
 
+              {/* stall count */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
                 <label style={{ fontSize: 11, fontWeight: 700, color: '#9aa6b2',
                   textTransform: 'uppercase', letterSpacing: '1px' }}>
@@ -378,16 +602,17 @@ function QuickAddPanel({ open, onClose, onCreated }: {
           )}
         </div>
 
-        {/* panel footer — wizard CTA */}
-        <div style={{ padding: '16px 24px', borderTop: '1px solid #f0f4f7', flexShrink: 0 }}>
-          <div style={{ fontSize: 12.5, color: '#9aa6b2', marginBottom: 10, lineHeight: 1.5 }}>
-            Need help with camera setup, Cloudflare, or stall mapping?
-          </div>
+        {/* panel footer */}
+        <div style={{ padding: '14px 24px', borderTop: '1px solid #f0f4f7', flexShrink: 0, display: 'flex', gap: 8 }}>
+          <button onClick={() => { onClose(); router.push('/cameras'); }} style={{
+            flex: 1, border: '1.5px solid #e1e7ec', background: '#fff', color: '#4a5568',
+            borderRadius: 10, padding: '9px', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
+            Browse cameras →
+          </button>
           <button onClick={() => { onClose(); router.push('/setup'); }} style={{
-            width: '100%', border: '1.5px solid #e1e7ec', background: '#fff', color: DARK,
-            borderRadius: 10, padding: '10px', fontSize: 13.5, fontWeight: 700, cursor: 'pointer',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
-            Open setup wizard →
+            flex: 1, border: 'none', background: DARK, color: '#fff',
+            borderRadius: 10, padding: '9px', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
+            Setup wizard →
           </button>
         </div>
       </div>
@@ -463,7 +688,7 @@ export default function ManagePage() {
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          {[{ href: '/', label: 'Dashboard' }, { href: '/map', label: 'Map' }].map(({ href, label }) => (
+          {[{ href: '/', label: 'Dashboard' }, { href: '/map', label: 'Map' }, { href: '/cameras', label: 'Cameras' }].map(({ href, label }) => (
             <Link key={href} href={href} style={{ padding: '6px 14px', borderRadius: 9, background: '#f0f4f6',
               color: DARK, fontSize: 12.5, fontWeight: 700, textDecoration: 'none' }}>{label}</Link>
           ))}
