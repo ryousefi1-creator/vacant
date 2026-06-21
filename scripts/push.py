@@ -224,16 +224,96 @@ def annotate_lot(frame, calib, info):
 
 
 def annotate_stalls(frame, calib, xy, states):
-    """PAVED lots: draw each real stall polygon red=taken / green=open, with faint
-    car boxes for context (image space)."""
+    """PAVED lots: draw stalls red=taken / green=open, road lines in blue, car boxes in grey."""
     viz = frame.copy()
     lw = max(2, frame.shape[1] // 600)
+
+    # faint car boxes
     for x1, y1, x2, y2 in xy:
         cv2.rectangle(viz, (int(x1), int(y1)), (int(x2), int(y2)), (150, 150, 150), 1)
+
+    # road segments (drawn by user in the setup wizard)
+    for r in calib.get('roads', []):
+        line = r.get('line', [])
+        if len(line) >= 2:
+            pt1 = tuple(int(v) for v in line[0])
+            pt2 = tuple(int(v) for v in line[1])
+            cv2.line(viz, pt1, pt2, (230, 130, 20), lw + 1)
+            cv2.putText(viz, 'ROAD', (pt1[0] + 6, pt1[1] - 8), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.45, (230, 130, 20), 1, cv2.LINE_AA)
+
+    # stall polygons
     for s, taken in zip(calib['stalls'], states):
         poly = np.array(s['poly'], np.int32)
-        cv2.polylines(viz, [poly], True, (0, 0, 255) if taken else (0, 200, 0), lw)
+        color = (0, 0, 220) if taken else (0, 210, 0)
+        cv2.polylines(viz, [poly], True, color, lw)
+        # stall center label
+        cx = int(np.mean([p[0] for p in s['poly']]))
+        cy = int(np.mean([p[1] for p in s['poly']]))
+        label = 'X' if taken else 'P'
+        cv2.putText(viz, label, (cx - 6, cy + 6), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5, color, 2, cv2.LINE_AA)
     return viz
+
+
+def _scale_drawn_stalls(calib: dict, actual_w: int, actual_h: int) -> list | None:
+    """Scale stall polygons from draw-image coordinates to actual frame coordinates.
+
+    When a user draws stalls in the setup wizard, coordinates are in the detection
+    image's pixel space (e.g. 800×450). YOLO bounding boxes are in the actual camera
+    frame space (e.g. 1280×720). This function scales them to match.
+    """
+    stalls = calib.get('stalls')
+    if not stalls:
+        return None
+    draw_w = calib.get('_stall_draw_width')
+    draw_h = calib.get('_stall_draw_height')
+    if not draw_w or not draw_h:
+        return stalls  # no draw-size recorded — assume already in frame coords
+    sx = actual_w / draw_w
+    sy = actual_h / draw_h
+    if abs(sx - 1.0) < 0.02 and abs(sy - 1.0) < 0.02:
+        return stalls  # already close enough
+    return [
+        {'poly': [[round(x * sx), round(y * sy)] for x, y in s['poly']]}
+        for s in stalls
+    ]
+
+
+def _filter_road_detections(calib: dict, xy, actual_w: int, actual_h: int) -> list:
+    """Remove bounding boxes whose center falls on a user-drawn road segment (buffer=50px).
+
+    Vehicles ON the road are moving, not parked — filtering them prevents false
+    occupancy from drive-through traffic.
+    """
+    roads = calib.get('roads')
+    if not roads or not xy:
+        return list(xy)
+
+    # Scale road line coords the same way as stalls
+    draw_w = calib.get('_stall_draw_width', actual_w)
+    draw_h = calib.get('_stall_draw_height', actual_h)
+    sx, sy = actual_w / draw_w, actual_h / draw_h
+    ROAD_BUFFER = 50  # pixels in actual frame space
+
+    def on_road(cx: float, cy: float) -> bool:
+        for r in roads:
+            line = r.get('line', [])
+            if len(line) < 2:
+                continue
+            x1, y1 = line[0][0] * sx, line[0][1] * sy
+            x2, y2 = line[1][0] * sx, line[1][1] * sy
+            dx, dy = x2 - x1, y2 - y1
+            len2 = dx * dx + dy * dy
+            if len2 == 0:
+                continue
+            t = max(0.0, min(1.0, ((cx - x1) * dx + (cy - y1) * dy) / len2))
+            px, py = x1 + t * dx, y1 + t * dy
+            if (cx - px) ** 2 + (cy - py) ** 2 <= ROAD_BUFFER ** 2:
+                return True
+        return False
+
+    return [b for b in xy if not on_road((b[0] + b[2]) / 2, (b[1] + b[3]) / 2)]
 
 
 def annotate_street(frame, xy):
@@ -267,6 +347,14 @@ def do_lot(model, calib, api, conf, imgsz, device, peaks, overlap=0.30, tile_img
     # for free-form gravel lots that have no countable spaces.
     if calib.get('stalls'):
         cid = calib['id']
+        actual_h, actual_w = frame.shape[:2]
+
+        # ── scale user-drawn stall coords to actual frame coordinates ────────
+        stalls_for_detection = _scale_drawn_stalls(calib, actual_w, actual_h)
+        calib = {**calib, 'stalls': stalls_for_detection}  # local copy, not persisted
+
+        # ── filter vehicles on drawn road segments ───────────────────────────
+        xy = _filter_road_detections(calib, xy, actual_w, actual_h)
 
         # ── stall boundary auto-refinement (background, every REFINE_FRAMES) ──
         cnt = _refine_counts.get(cid, 0) + 1

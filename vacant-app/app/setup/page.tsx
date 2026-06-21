@@ -97,9 +97,11 @@ export default function SetupPage() {
   const [network,  setNetwork]  = useState<'local' | 'remote'>('local');
   const [localIp,  setLocalIp]  = useState('192.168.1.X');
 
-  // drawn layout
-  const [drawnStalls, setDrawnStalls] = useState<DrawnStall[]>([]);
-  const [drawnRoads,  setDrawnRoads]  = useState<DrawnRoad[]>([]);
+  // drawn layout + the pixel dimensions of the detection image it was drawn on
+  const [drawnStalls,  setDrawnStalls]  = useState<DrawnStall[]>([]);
+  const [drawnRoads,   setDrawnRoads]   = useState<DrawnRoad[]>([]);
+  const [drawFrameW,   setDrawFrameW]   = useState(800);
+  const [drawFrameH,   setDrawFrameH]   = useState(450);
   const [saving, setSaving] = useState(false);
 
   const pollRef  = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -170,7 +172,15 @@ export default function SetupPage() {
     await fetch('/api/lots', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: lot.id, stalls: stalls.length ? stalls : null, roads, capacity: stalls.length }),
+      body: JSON.stringify({
+        id: lot.id,
+        stalls: stalls.length ? stalls : null,
+        roads,
+        capacity: stalls.length,
+        // pixel dimensions of detection image the stalls were drawn on — push.py scales to actual frame
+        _stall_draw_width:  drawFrameW,
+        _stall_draw_height: drawFrameH,
+      }),
     });
     setSaving(false);
     setStep(4);
@@ -374,7 +384,10 @@ export default function SetupPage() {
 
               <LotEditor
                 imageUrl={occ?.image ?? null}
-                onChange={(stalls, roads) => { setDrawnStalls(stalls); setDrawnRoads(roads); }}
+                onChange={(stalls, roads, fw, fh) => {
+                  setDrawnStalls(stalls); setDrawnRoads(roads);
+                  setDrawFrameW(fw); setDrawFrameH(fh);
+                }}
               />
 
               {drawnStalls.length === 0 && (

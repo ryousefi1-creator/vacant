@@ -8,7 +8,8 @@ type Tool = 'stall' | 'road' | 'erase';
 
 type Props = {
   imageUrl: string | null;
-  onChange: (stalls: DrawnStall[], roads: DrawnRoad[]) => void;
+  // frameW/frameH: natural pixel dimensions of the detection image (for coordinate mapping in push.py)
+  onChange: (stalls: DrawnStall[], roads: DrawnRoad[], frameW: number, frameH: number) => void;
 };
 
 const GREEN = '#10b981';
@@ -20,6 +21,7 @@ export default function LotEditor({ imageUrl, onChange }: Props) {
   const stateRef    = useRef<{ stalls: DrawnStall[]; roads: DrawnRoad[] }>({ stalls: [], roads: [] });
   const dragRef     = useRef<{ x: number; y: number } | null>(null);
   const nextId      = useRef(0);
+  const [imgDims,  setImgDims]  = useState({ w: 640, h: 360 }); // natural pixel size of detection image
 
   const [tool,    setTool]    = useState<Tool>('stall');
   const [counts,  setCounts]  = useState({ stalls: 0, roads: 0 });
@@ -94,11 +96,20 @@ export default function LotEditor({ imageUrl, onChange }: Props) {
 
   function labelSz(c: HTMLCanvasElement) { return Math.max(9, Math.round(c.width / 36)); }
 
-  // ── image load ────────────────────────────────────────────────────────────
+  // ── image load — set canvas to natural pixel dimensions of the detection image ──
   useEffect(() => {
     if (!imageUrl) { render(); return; }
     const img   = new Image();
-    img.onload  = () => { imgRef.current = img; render(); };
+    img.onload  = () => {
+      imgRef.current = img;
+      const c = canvasRef.current;
+      if (c) {
+        c.width  = img.naturalWidth;
+        c.height = img.naturalHeight;
+      }
+      setImgDims({ w: img.naturalWidth, h: img.naturalHeight });
+      render();
+    };
     img.onerror = () => render();
     img.src     = imageUrl;
   }, [imageUrl, render]);
@@ -159,13 +170,13 @@ export default function LotEditor({ imageUrl, onChange }: Props) {
 
   function notify() {
     const { stalls, roads } = stateRef.current;
-    onChange([...stalls], [...roads]);
+    onChange([...stalls], [...roads], imgDims.w, imgDims.h);
   }
 
   function clearAll() {
     stateRef.current = { stalls: [], roads: [] };
     setCounts({ stalls: 0, roads: 0 });
-    onChange([], []);
+    onChange([], [], imgDims.w, imgDims.h);
     render();
   }
 

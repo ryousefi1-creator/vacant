@@ -74,7 +74,7 @@ export async function POST(request: Request) {
 export async function PATCH(request: Request) {
   try {
     const body = await request.json();
-    const { id, name, url, capacity, stalls, roads } = body;
+    const { id, name, url, capacity, stalls, roads, _stall_draw_width, _stall_draw_height } = body;
     if (!id) return Response.json({ error: 'id required' }, { status: 400 });
     const file = path.join(CALIB_DIR, `${id}.json`);
     if (!fs.existsSync(file)) return Response.json({ error: 'not found' }, { status: 404 });
@@ -84,6 +84,9 @@ export async function PATCH(request: Request) {
     if (capacity !== undefined) calib.capacity  = Number(capacity) || 0;
     if (stalls   !== undefined) calib.stalls    = stalls;  // null = auto-detect, array = user-drawn
     if (roads    !== undefined) calib.roads     = roads;
+    // pixel size of detection image stalls were drawn on; push.py scales to actual frame
+    if (_stall_draw_width  !== undefined) calib._stall_draw_width  = Number(_stall_draw_width);
+    if (_stall_draw_height !== undefined) calib._stall_draw_height = Number(_stall_draw_height);
     fs.writeFileSync(file, JSON.stringify(calib, null, 2));
     return Response.json({ ok: true });
   } catch (e) {
