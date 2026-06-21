@@ -1,18 +1,6 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import dynamic from 'next/dynamic';
-import type { DrawnStall, DrawnRoad } from './LotEditor';
-
-const LotEditor = dynamic(() => import('./LotEditor'), {
-  ssr: false,
-  loading: () => (
-    <div style={{ background: '#0d1b2a', borderRadius: 14, aspectRatio: '16/9',
-      display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#4a5568', fontSize: 13 }}>
-      Loading editor…
-    </div>
-  ),
-});
 
 const GREEN = '#10b981';
 const DARK  = '#0d1b2a';
@@ -97,13 +85,6 @@ export default function SetupPage() {
   const [network,  setNetwork]  = useState<'local' | 'remote'>('local');
   const [localIp,  setLocalIp]  = useState('192.168.1.X');
 
-  // drawn layout + the pixel dimensions of the detection image it was drawn on
-  const [drawnStalls,  setDrawnStalls]  = useState<DrawnStall[]>([]);
-  const [drawnRoads,   setDrawnRoads]   = useState<DrawnRoad[]>([]);
-  const [drawFrameW,   setDrawFrameW]   = useState(800);
-  const [drawFrameH,   setDrawFrameH]   = useState(450);
-  const [saving, setSaving] = useState(false);
-
   const pollRef  = useRef<ReturnType<typeof setInterval> | null>(null);
   const connected = occ && Date.now() - occ.ts < 15_000;
 
@@ -149,41 +130,6 @@ export default function SetupPage() {
       setStep(1);
     } catch (err) { setCreateErr(String(err)); }
     finally { setCreating(false); }
-  }
-
-  // ── step 3: save drawn layout ────────────────────────────────────────────
-  async function saveLayout() {
-    if (!lot) return;
-    setSaving(true);
-
-    // Convert DrawnStall rectangles → calib stall polygon format
-    const stalls = drawnStalls.map(s => ({
-      poly: [
-        [Math.round(s.x),         Math.round(s.y)],
-        [Math.round(s.x + s.w),   Math.round(s.y)],
-        [Math.round(s.x + s.w),   Math.round(s.y + s.h)],
-        [Math.round(s.x),         Math.round(s.y + s.h)],
-      ] as [number, number][],
-    }));
-    const roads = drawnRoads.map(r => ({
-      line: [[Math.round(r.x1), Math.round(r.y1)], [Math.round(r.x2), Math.round(r.y2)]] as [number, number][],
-    }));
-
-    await fetch('/api/lots', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        id: lot.id,
-        stalls: stalls.length ? stalls : null,
-        roads,
-        capacity: stalls.length,
-        // pixel dimensions of detection image the stalls were drawn on — push.py scales to actual frame
-        _stall_draw_width:  drawFrameW,
-        _stall_draw_height: drawFrameH,
-      }),
-    });
-    setSaving(false);
-    setStep(4);
   }
 
   const rtmpPath  = lot ? `/live/${lot.id}` : '/live/YOUR_LOT_ID';
@@ -373,37 +319,70 @@ export default function SetupPage() {
           {step === 3 && lot && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
               <Heading title="Map your parking lot"
-                sub="Draw where your parking stalls and roads are. The AI will use this exact layout to track occupancy — no guesswork." />
+                sub="Design the layout by dragging roads and parking rows onto your camera feed. The AI knows exactly where every spot is." />
 
-              <div style={{ background: '#f0fdf4', border: '1px solid #86efac', borderRadius: 12,
-                padding: '12px 16px', fontSize: 13, color: '#166534', lineHeight: 1.7 }}>
-                <b>How to use:</b> Select <b>Parking Stall</b>, then click and drag to draw a rectangle over each spot
-                on the camera image. Draw <b>Road / Lane</b> lines for driving areas. The AI will immediately
-                know exactly where every stall is.
+              {/* hero CTA — opens full-screen Lot Builder */}
+              <div style={{ background: 'linear-gradient(135deg,#0d1b2a 0%,#1a2e3d 100%)', borderRadius: 18,
+                padding: '32px 28px', display: 'flex', gap: 24, alignItems: 'center' }}>
+                <div style={{ fontSize: 52 }}>🛣️</div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 800, fontSize: 19, color: '#fff', marginBottom: 6 }}>
+                    Open the Lot Builder
+                  </div>
+                  <div style={{ fontSize: 13.5, color: 'rgba(255,255,255,.65)', lineHeight: 1.65 }}>
+                    Drag <b style={{ color: '#4ade80' }}>Road + Auto-Fill</b> blocks onto your live camera image.
+                    Stall rows appear automatically on both sides of the road.
+                    Adjust counts, rotate, and reposition until it matches your lot.
+                  </div>
+                </div>
+                <a href={`/builder?id=${lot.id}&back=/setup`} target="_blank" rel="noopener noreferrer"
+                  style={{ border: 'none', borderRadius: 12, padding: '13px 22px', fontSize: 14,
+                    fontWeight: 700, cursor: 'pointer', textDecoration: 'none', flexShrink: 0,
+                    background: 'linear-gradient(160deg,#10b981,#059669)', color: '#fff',
+                    boxShadow: '0 4px 18px rgba(16,185,129,.45)' }}>
+                  Open Builder →
+                </a>
               </div>
 
-              <LotEditor
-                imageUrl={occ?.image ?? null}
-                onChange={(stalls, roads, fw, fh) => {
-                  setDrawnStalls(stalls); setDrawnRoads(roads);
-                  setDrawFrameW(fw); setDrawFrameH(fh);
-                }}
-              />
+              <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+                {/* steps preview */}
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {[
+                    { n: '1', text: 'Drag "Road + Auto-Fill" from the left panel onto the map' },
+                    { n: '2', text: 'Stall rows fill in automatically on both sides of the road' },
+                    { n: '3', text: 'Add/remove stalls, rotate 90°, or drag to reposition' },
+                    { n: '4', text: 'Click Save — the AI uses this layout immediately' },
+                  ].map(({ n, text }) => (
+                    <div key={n} style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+                      <div style={{ width: 24, height: 24, borderRadius: '50%', background: '#ecfdf5',
+                        color: '#059669', fontWeight: 800, fontSize: 12, display: 'flex', alignItems: 'center',
+                        justifyContent: 'center', flexShrink: 0, marginTop: 1 }}>{n}</div>
+                      <span style={{ fontSize: 13, color: '#4a5568', lineHeight: 1.55 }}>{text}</span>
+                    </div>
+                  ))}
+                </div>
 
-              {drawnStalls.length === 0 && (
-                <Note warn>
-                  No stalls drawn yet. You can also skip this and let the AI auto-detect stalls
-                  by watching where cars park — it takes a few minutes of live traffic.
-                </Note>
-              )}
+                {/* live preview */}
+                {occ?.image && (
+                  <div style={{ width: 220, flexShrink: 0 }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: '#9aa6b2', letterSpacing: '1px',
+                      textTransform: 'uppercase', marginBottom: 4 }}>Live feed preview</div>
+                    <div style={{ borderRadius: 10, overflow: 'hidden', border: `2px solid ${GREEN}`, aspectRatio: '16/9' }}>
+                      <img src={occ.image} alt="live" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <Note warn>
+                The builder opens in a new tab. After saving your layout there, come back here
+                and click Continue. Or skip — the AI will auto-detect stalls by watching where cars park.
+              </Note>
 
               <div style={{ display: 'flex', gap: 10 }}>
                 <button onClick={() => setStep(2)} style={secondaryBtn()}>← Back</button>
-                <Btn onClick={saveLayout} loading={saving}
-                  disabled={saving}>
-                  {drawnStalls.length > 0
-                    ? `Save ${drawnStalls.length} stall${drawnStalls.length !== 1 ? 's' : ''} & finish →`
-                    : 'Skip — auto-detect stalls →'}
+                <Btn onClick={() => setStep(4)}>
+                  Continue to finish →
                 </Btn>
               </div>
             </div>
@@ -418,9 +397,7 @@ export default function SetupPage() {
                   {lot.name} is live!
                 </div>
                 <div style={{ color: '#6b7a8d', fontSize: 15, marginTop: 10, lineHeight: 1.7, maxWidth: 440, margin: '10px auto 0' }}>
-                  {drawnStalls.length > 0
-                    ? `${drawnStalls.length} stalls are mapped. The AI will track each one in real time.`
-                    : 'The AI will auto-detect stall boundaries as cars park over the next few minutes.'}
+                  Visit the Lot Builder to map stalls, or the AI will auto-detect them over the next few minutes.
                 </div>
               </div>
 
@@ -442,7 +419,7 @@ export default function SetupPage() {
                   background: '#f0f4f6', color: DARK, fontWeight: 700, fontSize: 15, textDecoration: 'none' }}>
                   Lot Manager
                 </Link>
-                <button onClick={() => { setStep(0); setLot(null); setName(''); setDrawnStalls([]); setDrawnRoads([]); setOcc(null); }}
+                <button onClick={() => { setStep(0); setLot(null); setName(''); setOcc(null); }}
                   style={{ padding: '13px 26px', borderRadius: 12, border: '1.5px solid #e1e7ec',
                     background: '#fff', color: '#6b7a8d', fontWeight: 700, fontSize: 15, cursor: 'pointer' }}>
                   Add another lot
