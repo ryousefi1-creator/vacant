@@ -17,23 +17,19 @@ type Occ = {
   ts: number; id: string; name: string; inside: number | null;
   capacity: number | null; stalls: unknown[] | null; image: string | null;
 };
-type Calib = { id: string; name: string; url: string; capacity: number; lat?: number; lng?: number };
 
 const FONT = 'var(--font-geist-sans), system-ui, sans-serif';
 const GREEN = '#10b981'; const DARK = '#0d1b2a';
 
 export default function MapPage() {
+  // Live occupancy is the only source the map needs (served from memory/Redis, works on
+  // Vercel). Real lot coordinates live in ParkingMap's LOT_COORDS table, not the filesystem.
   const [occ, setOcc] = useState<Record<string, Occ>>({});
-  const [calibs, setCalibs] = useState<Calib[]>([]);
 
   useEffect(() => {
     async function load() {
-      const [o, c] = await Promise.all([
-        fetch('/api/occupancy').then(r => r.json()).catch(() => ({})),
-        fetch('/api/lots').then(r => r.json()).catch(() => []),
-      ]);
+      const o = await fetch('/api/occupancy').then(r => r.json()).catch(() => ({}));
       setOcc(o || {});
-      setCalibs(Array.isArray(c) ? c : []);
     }
     load();
     const id = setInterval(load, 5000);
@@ -57,21 +53,19 @@ export default function MapPage() {
         <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginRight: 8, fontSize: 12.5, color: '#6b7a8d' }}>
             <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-              <span style={{ width: 10, height: 10, borderRadius: '50%', background: GREEN, display: 'inline-block' }} /> Your lots
+              <span style={{ width: 10, height: 10, borderRadius: '50%', background: GREEN, display: 'inline-block' }} /> Our live lots
             </span>
             <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
               <span style={{ width: 10, height: 10, borderRadius: '50%', background: '#3b82f6', display: 'inline-block' }} /> Nearby parking
             </span>
           </div>
-          {[{href:'/',label:'Dashboard'},{href:'/manage',label:'Lot Manager'}].map(({href,label}) => (
-            <Link key={href} href={href} style={{ padding: '6px 14px', borderRadius: 9, background: '#f0f4f6',
-              color: DARK, fontSize: 12.5, fontWeight: 700, textDecoration: 'none' }}>{label}</Link>
-          ))}
+          <Link href="/live" style={{ padding: '6px 14px', borderRadius: 9, background: '#f0f4f6',
+            color: DARK, fontSize: 12.5, fontWeight: 700, textDecoration: 'none' }}>Dashboard</Link>
         </div>
       </header>
 
       {/* map fills the rest */}
-      <ParkingMap occ={occ} calibs={calibs} />
+      <ParkingMap occ={occ} />
     </div>
   );
 }
