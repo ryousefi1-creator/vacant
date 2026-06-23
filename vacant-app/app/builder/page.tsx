@@ -3,7 +3,7 @@ import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import dynamic from 'next/dynamic';
-import type { StallPoly, RoadSeg } from './LotBuilder';
+import type { StallPoly, RoadSeg, Perspective } from './LotBuilder';
 
 // LotBuilder uses SVG pointer events — safe to load with SSR disabled for consistency
 const LotBuilder = dynamic(() => import('./LotBuilder'), {
@@ -34,16 +34,18 @@ function BuilderInner() {
   const [imageH,  setImageH]  = useState(450);
   const [stalls,  setStalls]  = useState<StallPoly[]>([]);
   const [roads,   setRoads]   = useState<RoadSeg[]>([]);
+  const [persp,   setPersp]   = useState<Perspective>({ quad: null, topdown: false });
   const [saving,  setSaving]  = useState(false);
   const [saved,   setSaved]   = useState(false);
   const [count,   setCount]   = useState({ stalls: 0, roads: 0 });
 
-  const onChangeRef = useRef<(s: StallPoly[], r: RoadSeg[]) => void>(() => {});
-  onChangeRef.current = (s, r) => {
-    setStalls(s); setRoads(r);
+  const onChangeRef = useRef<(s: StallPoly[], r: RoadSeg[], p: Perspective) => void>(() => {});
+  onChangeRef.current = (s, r, p) => {
+    setStalls(s); setRoads(r); setPersp(p);
     setCount({ stalls: s.length, roads: r.length });
   };
-  const onChange = useCallback((s: StallPoly[], r: RoadSeg[]) => onChangeRef.current(s, r), []);
+  const onChange = useCallback(
+    (s: StallPoly[], r: RoadSeg[], p: Perspective) => onChangeRef.current(s, r, p), []);
 
   // load lot name + live image
   useEffect(() => {
@@ -71,20 +73,38 @@ function BuilderInner() {
     return () => clearInterval(id);
   }, [lotId]);
 
+  const canSave = count.stalls > 0 || !!persp.quad;
+
   async function save() {
     if (!lotId) return;
     setSaving(true);
+    const body: Record<string, unknown> = {
+      id: lotId,
+      stalls: stalls.length ? stalls : null,
+      roads,
+      capacity: stalls.length,
+      _stall_draw_width:  imageW,
+      _stall_draw_height: imageH,
+    };
+    // camera perspective: send the lot quad + map size + bird's-eye flag so
+    // push.py can rectify the angled view. Quad is in draw-image coords; record
+    // the draw size so the worker scales it to the real camera frame.
+    if (persp.quad) {
+      const q = persp.quad;
+      const dist = (a: number[], b: number[]) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+      const wpx = (dist(q[0], q[1]) + dist(q[3], q[2])) / 2;
+      const hpx = (dist(q[0], q[3]) + dist(q[1], q[2])) / 2;
+      const W = 600;
+      body.lot_quad = q;
+      body.map_size = [W, Math.max(200, Math.round(W * (hpx / Math.max(1, wpx))))];
+      body.detect_topdown = persp.topdown;
+      body._quad_draw_width = imageW;
+      body._quad_draw_height = imageH;
+    }
     await fetch('/api/lots', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        id: lotId,
-        stalls: stalls.length ? stalls : null,
-        roads,
-        capacity: stalls.length,
-        _stall_draw_width:  imageW,
-        _stall_draw_height: imageH,
-      }),
+      body: JSON.stringify(body),
     });
     setSaving(false);
     setSaved(true);
@@ -127,21 +147,21 @@ function BuilderInner() {
           </div>
         )}
 
-        <button onClick={save} disabled={saving || count.stalls === 0} style={{
+        <button onClick={save} disabled={saving || !canSave} style={{
           border: 'none', borderRadius: 9, padding: '8px 18px', fontSize: 13, fontWeight: 700,
-          cursor: count.stalls === 0 || saving ? 'not-allowed' : 'pointer',
-          background: saved ? '#a7f3d0' : count.stalls > 0 ? '#f0f4f6' : '#f0f4f6',
+          cursor: !canSave || saving ? 'not-allowed' : 'pointer',
+          background: saved ? '#a7f3d0' : '#f0f4f6',
           color: saved ? '#047857' : DARK, transition: 'all .15s',
         }}>
           {saved ? '✓ Saved' : saving ? 'Saving…' : 'Save'}
         </button>
 
-        <button onClick={saveAndBack} disabled={saving || count.stalls === 0} style={{
+        <button onClick={saveAndBack} disabled={saving || !canSave} style={{
           border: 'none', borderRadius: 9, padding: '8px 18px', fontSize: 13, fontWeight: 700,
-          cursor: count.stalls === 0 || saving ? 'not-allowed' : 'pointer',
-          background: count.stalls > 0 ? 'linear-gradient(160deg,#10b981,#059669)' : '#e8edf1',
-          color: count.stalls > 0 ? '#fff' : '#9aa6b2',
-          boxShadow: count.stalls > 0 ? '0 3px 10px rgba(16,185,129,.3)' : 'none',
+          cursor: !canSave || saving ? 'not-allowed' : 'pointer',
+          background: canSave ? 'linear-gradient(160deg,#10b981,#059669)' : '#e8edf1',
+          color: canSave ? '#fff' : '#9aa6b2',
+          boxShadow: canSave ? '0 3px 10px rgba(16,185,129,.3)' : 'none',
           transition: 'all .15s',
         }}>
           {saving ? 'Saving…' : 'Save & go back →'}

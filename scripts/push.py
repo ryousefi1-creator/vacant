@@ -293,6 +293,28 @@ def _scale_drawn_stalls(calib: dict, actual_w: int, actual_h: int) -> list | Non
     ]
 
 
+def _scale_quad(calib: dict, actual_w: int, actual_h: int) -> dict:
+    """Scale a user-drawn lot_quad from the setup image's pixel space to the actual
+    camera frame, returning a shallow-copied calib (original left untouched).
+
+    The Lot Builder draws the parking-area quad on the posted preview image, which
+    to_data_uri downscales to ~800px wide; YOLO boxes and detect_topdown operate in
+    the full frame. This mirrors _scale_drawn_stalls. No-op when no _quad_draw_* is
+    recorded (e.g. a lot_quad written directly in frame coords by the auto-stall
+    learner), so existing calibrations are unaffected.
+    """
+    q = calib.get('lot_quad')
+    dw = calib.get('_quad_draw_width')
+    dh = calib.get('_quad_draw_height')
+    if not q or not dw or not dh:
+        return calib
+    sx, sy = actual_w / dw, actual_h / dh
+    if abs(sx - 1.0) < 0.02 and abs(sy - 1.0) < 0.02:
+        return calib
+    nq = [[round(x * sx), round(y * sy)] for x, y in q]
+    return {**calib, 'lot_quad': nq}
+
+
 def _filter_road_detections(calib: dict, xy, actual_w: int, actual_h: int) -> list:
     """Remove bounding boxes whose center falls on a user-drawn road segment (buffer=50px).
 
@@ -352,6 +374,10 @@ def do_lot(model, calib, api, conf, imgsz, device, peaks, overlap=0.30, tile_img
     frame = fetch(calib['url'])
     if frame is None:
         raise RuntimeError('no frame')
+    # scale a builder-drawn perspective quad to the real frame before detection
+    # (detect_topdown warps using lot_quad, so it must be in frame coords first)
+    actual_h, actual_w = frame.shape[:2]
+    calib = _scale_quad(calib, actual_w, actual_h)
     xy = detect_lot(model, frame, calib, conf, imgsz, tile_imgsz, tile_grid, device)
     frame = anonymize.anonymize(frame, device)   # blur plates + faces before this frame is posted
 

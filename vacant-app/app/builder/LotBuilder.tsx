@@ -4,6 +4,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 // ── output types consumed by the caller ──────────────────────────────────────
 export type StallPoly = { poly: [number, number][] };
 export type RoadSeg   = { line: [[number, number], [number, number]] };
+// Camera perspective: the 4 ground corners of the parking area (image px) plus
+// whether to apply bird's-eye correction before detection. Feeds push.py's
+// lot_quad + detect_topdown, which rectifies an angled view so the AI sees cars
+// from above — far/clustered cars detect far more reliably.
+export type Perspective = { quad: [number, number][] | null; topdown: boolean };
 
 // ── internal element types ────────────────────────────────────────────────────
 type Rot = 0 | 90;
@@ -167,8 +172,10 @@ type Props = {
   imageUrl: string | null;
   imageW: number;
   imageH: number;
-  onChange: (stalls: StallPoly[], roads: RoadSeg[]) => void;
+  onChange: (stalls: StallPoly[], roads: RoadSeg[], perspective: Perspective) => void;
 };
+
+const PERSP_C = '#38bdf8';  // perspective quad color (sky blue, distinct from green stalls / amber select)
 
 // ── main component ────────────────────────────────────────────────────────────
 export default function LotBuilder({ imageUrl, imageW, imageH, onChange }: Props) {
@@ -178,11 +185,16 @@ export default function LotBuilder({ imageUrl, imageW, imageH, onChange }: Props
   const [dragging,  setDragging]  = useState<{ id: string; ox: number; oy: number } | null>(null);
   const [grid,      setGrid]      = useState(true);
   const [dragOver,  setDragOver]  = useState(false);
+  // ── camera perspective ──────────────────────────────────────────────────────
+  const [quadOn,     setQuadOn]     = useState(false);
+  const [quad,       setQuad]       = useState<[number, number][] | null>(null);
+  const [topdown,    setTopdown]    = useState(false);
+  const [cornerDrag, setCornerDrag] = useState<number | null>(null);
 
   const vw = imageW || 800;
   const vh = imageH || 450;
 
-  // notify parent whenever elements change
+  // notify parent whenever elements OR perspective change
   useEffect(() => {
     const stalls: StallPoly[] = elems.flatMap(e =>
       e.kind === 'road' ? roadToStalls(e) : rowToStalls(e)
@@ -190,8 +202,21 @@ export default function LotBuilder({ imageUrl, imageW, imageH, onChange }: Props
     const roads: RoadSeg[] = elems
       .filter((e): e is RoadEl => e.kind === 'road')
       .map(roadToSeg);
-    onChange(stalls, roads);
-  }, [elems, onChange]);
+    onChange(stalls, roads, { quad: quadOn ? quad : null, topdown: quadOn && topdown });
+  }, [elems, onChange, quadOn, quad, topdown]);
+
+  function enablePerspective(on: boolean) {
+    setQuadOn(on);
+    if (on && !quad) {
+      // sensible starting quad: a centered trapezoid the user nudges onto the lot
+      setQuad([
+        [Math.round(vw * 0.20), Math.round(vh * 0.36)],
+        [Math.round(vw * 0.80), Math.round(vh * 0.36)],
+        [Math.round(vw * 0.92), Math.round(vh * 0.88)],
+        [Math.round(vw * 0.08), Math.round(vh * 0.88)],
+      ]);
+    }
+  }
 
   const sel = selId ? elems.find(e => e.id === selId) ?? null : null;
 
@@ -208,9 +233,22 @@ export default function LotBuilder({ imageUrl, imageW, imageH, onChange }: Props
   }
 
   function onPointerMove(e: React.PointerEvent<SVGSVGElement>) {
-    if (!dragging) return;
     const svg = svgRef.current;
     if (!svg) return;
+    // perspective corner takes priority over element drag
+    if (cornerDrag !== null) {
+      const pt = svgPt(svg, e.clientX, e.clientY);
+      const nx = Math.max(0, Math.min(vw, Math.round(pt.x)));
+      const ny = Math.max(0, Math.min(vh, Math.round(pt.y)));
+      setQuad(q => {
+        if (!q) return q;
+        const c = q.slice() as [number, number][];
+        c[cornerDrag] = [nx, ny];
+        return c;
+      });
+      return;
+    }
+    if (!dragging) return;
     const pt  = svgPt(svg, e.clientX, e.clientY);
     const nx  = snapV(pt.x - dragging.ox);
     const ny  = snapV(pt.y - dragging.oy);
@@ -221,6 +259,13 @@ export default function LotBuilder({ imageUrl, imageW, imageH, onChange }: Props
 
   function onPointerUp() {
     setDragging(null);
+    setCornerDrag(null);
+  }
+
+  function startCornerDrag(e: React.PointerEvent, i: number) {
+    e.stopPropagation();
+    setCornerDrag(i);
+    (e.target as Element).setPointerCapture(e.pointerId);
   }
 
   // ── drop from palette ─────────────────────────────────────────────────────
@@ -479,6 +524,34 @@ export default function LotBuilder({ imageUrl, imageW, imageH, onChange }: Props
           </label>
         </div>
 
+        {/* camera perspective */}
+        <div style={{ borderTop: '1px solid #e7ecf0', paddingTop: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#9aa6b2', textTransform: 'uppercase', letterSpacing: '1px' }}>
+            Camera perspective
+          </div>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12.5, color: '#4a5568', cursor: 'pointer' }}>
+            <input type="checkbox" checked={quadOn} onChange={e => enablePerspective(e.target.checked)}
+              style={{ accentColor: PERSP_C }} />
+            Mark parking area
+          </label>
+          {quadOn && (
+            <>
+              <div style={{ fontSize: 11.5, color: '#6b7a8d', lineHeight: 1.5 }}>
+                Drag the 4 blue dots onto the corners of the parking ground.
+              </div>
+              <label style={{ display: 'flex', alignItems: 'flex-start', gap: 7, fontSize: 12.5,
+                color: '#4a5568', cursor: 'pointer', background: '#f0f9ff', border: '1px solid #bae6fd',
+                borderRadius: 9, padding: '8px 10px' }}>
+                <input type="checkbox" checked={topdown} onChange={e => setTopdown(e.target.checked)}
+                  style={{ accentColor: PERSP_C, marginTop: 1 }} />
+                <span><b>Bird&apos;s-eye correction</b><br />
+                  <span style={{ fontSize: 11.5, color: '#6b7a8d' }}>Straightens an angled view before AI detection — improves accuracy on far/clustered cars.</span>
+                </span>
+              </label>
+            </>
+          )}
+        </div>
+
         {elems.length > 0 && (
           <div style={{ background: '#f0fdf4', borderRadius: 10, padding: '10px 12px',
             border: '1px solid #86efac', fontSize: 12.5, color: '#065f46', lineHeight: 1.6 }}>
@@ -545,6 +618,30 @@ export default function LotBuilder({ imageUrl, imageW, imageH, onChange }: Props
 
             {/* elements */}
             {elems.map(renderEl)}
+
+            {/* camera-perspective quad */}
+            {quadOn && quad && (
+              <g>
+                <polygon
+                  points={quad.map(([x, y]) => `${x},${y}`).join(' ')}
+                  fill={`${PERSP_C}22`} stroke={PERSP_C} strokeWidth={2.5} strokeDasharray="8 4" />
+                {/* edge midpoint guides */}
+                {quad.map((p, i) => {
+                  const n = quad[(i + 1) % 4];
+                  return <line key={`e${i}`} x1={p[0]} y1={p[1]} x2={n[0]} y2={n[1]} stroke={PERSP_C} strokeWidth={1} opacity={0.5} />;
+                })}
+                {/* draggable corner handles */}
+                {quad.map(([x, y], i) => (
+                  <g key={`c${i}`}>
+                    <circle cx={x} cy={y} r={11} fill={PERSP_C} stroke="#fff" strokeWidth={2.5}
+                      style={{ cursor: cornerDrag === i ? 'grabbing' : 'grab' }}
+                      onPointerDown={e => startCornerDrag(e, i)} />
+                    <text x={x} y={y + 4} textAnchor="middle" fontSize={11} fontWeight={800}
+                      fill="#fff" style={{ pointerEvents: 'none' }}>{i + 1}</text>
+                  </g>
+                ))}
+              </g>
+            )}
           </svg>
         </div>
 
