@@ -24,3 +24,11 @@ vacant-app/next-env.d.ts
 
 # local launcher (contains the write token)
 start.sh
+
+# TLS key/cert for local HTTPS — never commit private keys
+auto.key
+auto.crt
+*.pem
+
+# aider tool history / cache
+.aider*

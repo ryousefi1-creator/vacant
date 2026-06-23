@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { Suspense } from 'react';
+import Assistant from './Assistant';
 
 const GREEN = '#10b981';
 const DARK  = '#0d1b2a';
@@ -988,6 +989,16 @@ function SetupWizard() {
 
         </div>
       </div>
+
+      <Assistant ctx={{
+        step,
+        stepName: STEPS[step] ?? '',
+        lotId: lot?.id ?? null,
+        lotName: lot?.name ?? null,
+        cameraBrand: brand?.name ?? null,
+        connected: !!connected,
+        count: occ?.count ?? null,
+      }} />
     </div>
   );
 }
